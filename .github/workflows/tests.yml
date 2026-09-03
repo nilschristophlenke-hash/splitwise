@@ -1,0 +1,39 @@
+name: Tests
+
+# The site is deployed by Vercel, which builds from this repo on every push.
+# There is no deploy job here on purpose: an earlier GitHub Pages job kept
+# failing because the workflow token is not allowed to create a Pages site,
+# which made every run look broken when nothing was.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Model unit tests
+        run: node tests/model.test.js
+
+      # Applies supabase/schema.sql to real Postgres (compiled to WASM, so no
+      # database service is needed) and then attacks the row-level security
+      # policies as three different users. This is what stops a change to the
+      # policies from quietly exposing one group's expenses to another.
+      - name: Install test dependencies
+        run: npm install --no-audit --no-fund
+        working-directory: tests
+
+      - name: Database security tests
+        run: node rls.test.js
+        working-directory: tests
