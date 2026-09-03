@@ -42,7 +42,7 @@ var SW = SW || {};
 
 SW.Config = {
   SUPABASE_URL: 'https://yfswchnkhsgdyxgqzsqm.supabase.co',
-  SUPABASE_ANON_KEY: '' // the "sb_publishable_..." key (older projects: "anon" "public")
+  SUPABASE_ANON_KEY: 'sb_publishable_eQQzJqj2-63bel_M1OnxrA_6tAk7IV9'
 };
 
 // isConfigured() is true only once BOTH values above have been filled in
