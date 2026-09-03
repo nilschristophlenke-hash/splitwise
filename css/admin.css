@@ -1,0 +1,1002 @@
+/*
+  css/admin.css — self-contained styles for the admin console.
+  This file does NOT rely on css/styles.css: it redefines the shared design
+  tokens itself, but recolours --accent to indigo so the admin console reads
+  as a distinct "internal tool" surface, per the spec.
+*/
+
+/* ---------- design tokens ---------- */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f0f1f4;
+  --border: #e2e6ea;
+  --text: #14181d;
+  --text-muted: #6b7480;
+  --accent: #6b7ce8;       /* admin's distinct indigo accent (app uses teal) */
+  --danger: #e5644e;
+  --warn: #e0a33e;
+  --radius: 10px;
+  --accent-rgb: 107, 124, 232;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14181d;
+    --surface: #1c2229;
+    --surface-2: #232b33;
+    --text: #e8ecef;
+    --text-muted: #97a1ac;
+    --border: #2c353e;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+code,
+pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+a {
+  color: var(--accent);
+}
+
+button {
+  font-family: inherit;
+}
+
+/* ============================================================
+   LOGIN GATE
+   ============================================================ */
+
+.login-gate {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  padding: 24px;
+  z-index: 100;
+}
+
+/* The `hidden` attribute has to beat the `display: flex` above: an author
+   stylesheet rule always wins over the browser's built-in [hidden] rule,
+   so without this the gate would stay painted over the console after unlock. */
+.login-gate[hidden] {
+  display: none;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px 28px 22px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.login-title {
+  margin: 0;
+  font-size: 1.3rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.login-title::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: inline-block;
+}
+
+.login-sub {
+  margin: 0 0 14px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.login-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.login-input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: calc(var(--radius) - 4px);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 1rem;
+  margin-bottom: 14px;
+}
+
+.login-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.login-submit {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: calc(var(--radius) - 4px);
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.login-submit:hover {
+  filter: brightness(1.08);
+}
+
+.login-error {
+  color: var(--danger);
+  font-size: 0.85rem;
+  margin: 10px 0 0;
+}
+
+.login-note {
+  margin: 16px 0 0;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.login-note code {
+  background: var(--surface-2);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+@keyframes shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-5px); }
+  40%, 60% { transform: translateX(5px); }
+}
+
+.login-card.shake {
+  animation: shake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+/* ============================================================
+   ADMIN SHELL
+   ============================================================ */
+
+.admin-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.admin-topbar-left {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.admin-logo {
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+.admin-logo-sub {
+  font-size: 0.78rem;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.admin-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.back-link {
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+.back-link:hover {
+  text-decoration: underline;
+}
+
+.logout-btn {
+  padding: 6px 12px;
+  border-radius: calc(var(--radius) - 4px);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.logout-btn:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.admin-body {
+  display: grid;
+  grid-template-columns: 210px 1fr;
+  min-height: calc(100vh - 53px);
+}
+
+.admin-sidebar {
+  border-right: 1px solid var(--border);
+  padding: 16px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  top: 53px;
+  align-self: start;
+  height: calc(100vh - 53px);
+  overflow-y: auto;
+}
+
+.nav-btn {
+  text-align: left;
+  padding: 9px 12px;
+  border-radius: calc(var(--radius) - 4px);
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.nav-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.nav-btn.active {
+  background: rgba(var(--accent-rgb), 0.14);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.admin-main {
+  padding: 22px 28px 60px;
+  max-width: 980px;
+}
+
+.admin-section[hidden] {
+  display: none;
+}
+
+.section-header {
+  margin-bottom: 18px;
+}
+
+.section-header h2 {
+  margin: 0 0 4px;
+}
+
+.section-desc {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.subhead {
+  font-size: 1rem;
+  margin: 28px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.subhead-sm {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin: 18px 0 8px;
+}
+
+.lead {
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.muted {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ============================================================
+   SHARED: cards / tables / badges
+   ============================================================ */
+
+.field-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+  margin-bottom: 6px;
+}
+
+.field-table th,
+.field-table td {
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.field-table th {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.arrow-icon {
+  display: block;
+  color: var(--accent);
+}
+
+/* ============================================================
+   OVERVIEW — layer stack
+   ============================================================ */
+
+.layer-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  max-width: 560px;
+}
+
+.layer-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+}
+
+.layer-name {
+  font-weight: 700;
+  margin-bottom: 3px;
+}
+
+.layer-files {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+
+.layer-resp {
+  font-size: 0.86rem;
+  color: var(--text-muted);
+}
+
+.layer-arrow {
+  display: flex;
+  justify-content: center;
+  padding: 2px 0;
+}
+
+.principles-list {
+  margin: 0;
+  padding-left: 20px;
+  line-height: 1.8;
+}
+
+/* ============================================================
+   WORKFLOWS
+   ============================================================ */
+
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.search-bar input[type="search"] {
+  flex: 1;
+  padding: 9px 12px;
+  border-radius: calc(var(--radius) - 4px);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.search-bar input[type="search"]:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.search-count {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.workflow-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.workflow-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.workflow-card-header {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto 20px;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+}
+
+.workflow-title {
+  font-weight: 700;
+}
+
+.workflow-trigger {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.workflow-toggle-icon {
+  display: flex;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+}
+
+.workflow-card.open .workflow-toggle-icon {
+  transform: rotate(180deg);
+}
+
+.workflow-card-body {
+  max-height: 0;
+  overflow: hidden;
+  padding: 0 18px;
+  transition: max-height 0.2s ease, padding 0.2s ease;
+}
+
+.workflow-card.open .workflow-card-body {
+  max-height: none;
+  padding: 0 18px 18px;
+}
+
+.workflow-purpose {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  margin: 0 0 14px;
+}
+
+/* vertical numbered flow diagram */
+.flow-diagram {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+}
+
+.flow-step {
+  display: grid;
+  grid-template-columns: 32px 1fr;
+  position: relative;
+}
+
+.flow-step-marker {
+  display: flex;
+  justify-content: center;
+}
+
+.flow-step-n {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+}
+
+.flow-step-body {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 4px);
+  padding: 10px 12px;
+  margin: 0 0 6px 4px;
+}
+
+.flow-step-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 3px;
+}
+
+.actor-badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.actor-view { color: #2a8f6f; border-color: #2a8f6f; }
+.actor-store { color: var(--accent); border-color: var(--accent); }
+.actor-model { color: var(--warn); border-color: var(--warn); }
+.actor-localstorage { color: var(--danger); border-color: var(--danger); }
+.actor-admin { color: #9257c9; border-color: #9257c9; }
+
+.flow-step-action {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.flow-step-detail {
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.flow-step-file {
+  margin-top: 4px;
+}
+
+.flow-step-file code {
+  font-size: 0.74rem;
+  color: var(--accent);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.flow-step-arrow {
+  grid-column: 1 / 2;
+  display: flex;
+  justify-content: center;
+  color: var(--text-muted);
+  margin: -4px 0 -2px;
+}
+
+.invariants-list {
+  margin: 0 0 8px;
+  padding-left: 20px;
+  font-size: 0.86rem;
+  line-height: 1.7;
+}
+
+.failure-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+  margin-bottom: 4px;
+}
+
+.failure-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.fail-case {
+  width: 38%;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+.fail-handling {
+  color: var(--text-muted);
+}
+
+/* ============================================================
+   DATA MODEL
+   ============================================================ */
+
+.entity-tables {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+.entity-block {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+
+.entity-name {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+  color: var(--accent);
+}
+
+.relations-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.er-sketch-wrap {
+  position: relative;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  background: var(--surface);
+}
+
+.er-boxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 40px 56px;
+  position: relative;
+  z-index: 2;
+}
+
+.er-box {
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: calc(var(--radius) - 2px);
+  padding: 10px 14px;
+  min-width: 140px;
+}
+
+.er-box-title {
+  font-weight: 700;
+  font-size: 0.88rem;
+  margin-bottom: 4px;
+}
+
+.er-box-fields {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.er-lines {
+  position: absolute;
+  inset: 20px;
+  z-index: 1;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.er-line {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  opacity: 0.7;
+}
+
+/* ============================================================
+   ALGORITHMS
+   ============================================================ */
+
+.algo-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin-bottom: 14px;
+  position: relative;
+}
+
+.algo-name {
+  margin: 0 0 4px;
+  font-size: 1rem;
+}
+
+.algo-complexity {
+  display: inline-block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.76rem;
+  background: rgba(var(--accent-rgb), 0.14);
+  color: var(--accent);
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-bottom: 8px;
+}
+
+.algo-card p {
+  font-size: 0.88rem;
+  line-height: 1.6;
+  margin: 0 0 4px;
+  color: var(--text);
+}
+
+.pseudocode {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 4px);
+  padding: 12px 14px;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.worked-example {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+/* ============================================================
+   STATE MACHINE
+   ============================================================ */
+
+.sm-wrap {
+  position: relative;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 40px 20px 20px;
+  background: var(--surface);
+  margin-bottom: 18px;
+}
+
+.sm-boxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 46px 40px;
+  position: relative;
+  z-index: 2;
+}
+
+.sm-box {
+  background: var(--surface-2);
+  border: 2px solid var(--accent);
+  border-radius: 999px;
+  padding: 10px 18px;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.sm-lines {
+  position: absolute;
+  inset: 40px 20px 20px;
+  z-index: 1;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.sm-line {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  opacity: 0.75;
+}
+
+/* ============================================================
+   LIVE STATE
+   ============================================================ */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.stat-tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  text-align: center;
+}
+
+.stat-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.stat-label {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-top: 2px;
+}
+
+.group-balance-block {
+  margin-bottom: 16px;
+}
+
+.balance-positive {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.balance-negative {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.json-details {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 10px 14px;
+  margin-bottom: 6px;
+}
+
+.json-details summary {
+  cursor: pointer;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.json-pretty {
+  margin: 10px 0 2px;
+  font-size: 0.76rem;
+  line-height: 1.5;
+  max-height: 420px;
+  overflow: auto;
+  background: var(--surface-2);
+  border-radius: calc(var(--radius) - 4px);
+  padding: 12px;
+  white-space: pre;
+}
+
+.integrity-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.86rem;
+  flex-wrap: wrap;
+}
+
+.badge {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 2px 9px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.badge-pass {
+  background: rgba(28, 194, 159, 0.16);
+  color: #1cc29f;
+}
+
+.badge-fail {
+  background: rgba(229, 100, 78, 0.16);
+  color: var(--danger);
+}
+
+.integrity-name {
+  font-weight: 600;
+}
+
+.integrity-detail {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  width: 100%;
+  padding-left: 42px;
+}
+
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+
+@media (max-width: 760px) {
+  .admin-body {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-sidebar {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .admin-main {
+    padding: 18px 16px 50px;
+  }
+}
+
+/* ============================================================
+   PRINT
+   ============================================================ */
+
+@media print {
+  .login-gate {
+    display: none !important;
+  }
+
+  .admin-sidebar,
+  .admin-topbar-right,
+  .search-bar {
+    display: none !important;
+  }
+
+  .admin-body {
+    display: block;
+  }
+
+  .admin-section[hidden] {
+    display: block !important;
+  }
+
+  .workflow-card-body {
+    max-height: none !important;
+    padding: 0 18px 18px !important;
+  }
+
+  details:not([open]) > *:not(summary) {
+    display: block !important;
+  }
+
+  .er-sketch-wrap,
+  .sm-wrap {
+    break-inside: avoid;
+  }
+}

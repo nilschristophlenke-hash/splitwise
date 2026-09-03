@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Splitwise — Admin Console</title>
+  <link rel="stylesheet" href="css/admin.css" />
+</head>
+<body>
+
+  <!--
+    Login gate. This is intentionally a client-side-only demo lock (see the
+    honest note below and js/admin.js) — it is NOT real security.
+    Re-appears every new browser session because it reads sessionStorage.
+  -->
+  <div id="login-gate" class="login-gate">
+    <form id="login-form" class="login-card" novalidate>
+      <h1 class="login-title">Splitwise Admin</h1>
+      <p class="login-sub">Enter the demo password to continue.</p>
+
+      <label for="login-password" class="login-label">Password</label>
+      <input
+        id="login-password"
+        class="login-input"
+        type="password"
+        inputmode="numeric"
+        autocomplete="off"
+        placeholder="••"
+        autofocus
+      />
+
+      <button type="submit" class="login-submit">Unlock console</button>
+
+      <p id="login-error" class="login-error" hidden>Wrong password. Try again.</p>
+
+      <p class="login-note">
+        <strong>Honest note:</strong> this is a demo gate only. The password check
+        runs entirely in your browser (see <code>js/admin.js</code>) and is stored
+        in <code>sessionStorage</code> — anyone can read the source, open dev tools,
+        or view the page source to bypass it. It exists to keep this page out of
+        casual view, not to protect real data. Never rely on this pattern for
+        anything that actually matters.
+      </p>
+    </form>
+  </div>
+
+  <!-- Admin console, hidden until the gate above is passed -->
+  <div id="admin-app" hidden>
+    <header class="admin-topbar">
+      <div class="admin-topbar-left">
+        <span class="admin-logo">Splitwise</span>
+        <span class="admin-logo-sub">Admin Console</span>
+      </div>
+      <div class="admin-topbar-right">
+        <a href="index.html" class="back-link">← Back to app</a>
+        <button type="button" id="logout-btn" class="logout-btn">Log out</button>
+      </div>
+    </header>
+
+    <div class="admin-body">
+      <nav class="admin-sidebar" aria-label="Admin sections">
+        <button type="button" class="nav-btn active" data-section="overview" aria-current="page">
+          Overview
+        </button>
+        <button type="button" class="nav-btn" data-section="workflows">
+          Workflows
+        </button>
+        <button type="button" class="nav-btn" data-section="data">
+          Data model
+        </button>
+        <button type="button" class="nav-btn" data-section="algorithms">
+          Algorithms
+        </button>
+        <button type="button" class="nav-btn" data-section="state">
+          State machine
+        </button>
+        <button type="button" class="nav-btn" data-section="live">
+          Live state
+        </button>
+      </nav>
+
+      <main class="admin-main">
+
+        <section id="section-overview" class="admin-section">
+          <div class="section-header">
+            <h2>Overview</h2>
+            <p class="section-desc">How the app is layered, top to bottom, and the principles that hold it together.</p>
+          </div>
+          <div class="section-body"><!-- rendered by js/admin.js --></div>
+        </section>
+
+        <section id="section-workflows" class="admin-section" hidden>
+          <div class="section-header">
+            <h2>Workflows</h2>
+            <p class="section-desc">Every user-facing and internal flow the app knows about, step by step.</p>
+          </div>
+          <div class="section-body"><!-- rendered by js/admin.js --></div>
+        </section>
+
+        <section id="section-data" class="admin-section" hidden>
+          <div class="section-header">
+            <h2>Data model</h2>
+            <p class="section-desc">Entities, their fields, and how they relate to one another.</p>
+          </div>
+          <div class="section-body"><!-- rendered by js/admin.js --></div>
+        </section>
+
+        <section id="section-algorithms" class="admin-section" hidden>
+          <div class="section-header">
+            <h2>Algorithms</h2>
+            <p class="section-desc">The non-obvious math behind splitting expenses and settling debts.</p>
+          </div>
+          <div class="section-body"><!-- rendered by js/admin.js --></div>
+        </section>
+
+        <section id="section-state" class="admin-section" hidden>
+          <div class="section-header">
+            <h2>State machine</h2>
+            <p class="section-desc">The app's lifecycle, as states and the transitions between them.</p>
+          </div>
+          <div class="section-body"><!-- rendered by js/admin.js --></div>
+        </section>
+
+        <section id="section-live" class="admin-section" hidden>
+          <div class="section-header">
+            <h2>Live state</h2>
+            <p class="section-desc">What is actually sitting in the store right now, inspected live.</p>
+          </div>
+          <div class="section-body"><!-- rendered by js/admin.js --></div>
+        </section>
+
+      </main>
+    </div>
+  </div>
+
+  <!-- Script order matches the app: model -> store -> workflows -> this page's own script -->
+  <script src="js/model.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/workflows.js"></script>
+  <script src="js/admin.js"></script>
+</body>
+</html>

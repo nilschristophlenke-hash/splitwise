@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Splitwise</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- ============================== Header ============================== -->
+    <header class="app-header">
+      <div class="brand"><span class="logo-dot" aria-hidden="true"></span> Splitwise</div>
+      <div class="spacer"></div>
+      <div class="header-controls">
+        <label for="currentUserSelect" class="visually-hidden">Current user</label>
+        <select id="currentUserSelect" aria-label="Current user"></select>
+
+        <div class="dropdown">
+          <button id="dataMenuBtn" class="btn" aria-haspopup="true" aria-expanded="false">
+            Data ▾
+          </button>
+          <div id="dataMenu" class="dropdown-menu" hidden role="menu">
+            <button type="button" id="exportBtn" role="menuitem">Export JSON</button>
+            <button type="button" id="importBtn" role="menuitem">Import JSON…</button>
+            <input type="file" id="importFileInput" accept="application/json" class="visually-hidden" />
+            <hr />
+            <button type="button" id="demoBtn" role="menuitem">Load demo data</button>
+            <button type="button" id="resetBtn" role="menuitem">Reset all data</button>
+          </div>
+        </div>
+
+        <a class="btn" href="admin.html">Admin</a>
+      </div>
+    </header>
+
+    <!-- ============================== Body ============================== -->
+    <div class="app-body">
+      <!-- ---------------------------- Sidebar ---------------------------- -->
+      <nav class="sidebar" aria-label="Groups">
+        <div class="sidebar-header">
+          <h2>Groups</h2>
+        </div>
+        <ul class="group-list" id="groupList"></ul>
+        <div class="sidebar-footer">
+          <button type="button" class="btn btn-primary btn-block" id="newGroupBtn">+ New group</button>
+        </div>
+      </nav>
+
+      <!-- --------------------------- Main panel --------------------------- -->
+      <main class="main-panel" id="mainPanel">
+        <!-- Filled by app.js: empty state, or group view -->
+      </main>
+    </div>
+  </div>
+
+  <!-- ============================== Toasts ============================== -->
+  <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- ========================= New group modal ========================= -->
+  <div class="modal-overlay" id="groupModalOverlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="groupModalTitle">
+      <div class="modal-header">
+        <h2 id="groupModalTitle">New group</h2>
+        <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog">✕</button>
+      </div>
+      <form id="groupForm">
+        <div class="form-row">
+          <label for="groupNameInput">Group name</label>
+          <input type="text" id="groupNameInput" required maxlength="60" placeholder="e.g. Lisbon Flat" />
+        </div>
+        <div class="form-row">
+          <label for="groupCurrencySelect">Currency</label>
+          <select id="groupCurrencySelect">
+            <option value="EUR">EUR (€)</option>
+            <option value="USD">USD ($)</option>
+            <option value="GBP">GBP (£)</option>
+            <option value="CHF">CHF</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="groupMembersInput">Members (comma-separated)</label>
+          <input type="text" id="groupMembersInput" placeholder="e.g. Nils, Mara, Tomás" />
+          <p class="hint">List everyone in the group, including yourself.</p>
+        </div>
+        <p class="form-error" id="groupFormError" role="alert"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Create group</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===================== Add / Edit expense modal ===================== -->
+  <div class="modal-overlay" id="expenseModalOverlay" hidden>
+    <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="expenseModalTitle">
+      <div class="modal-header">
+        <h2 id="expenseModalTitle">Add expense</h2>
+        <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog">✕</button>
+      </div>
+      <form id="expenseForm">
+        <input type="hidden" id="expenseIdInput" />
+        <div class="form-row">
+          <label for="expenseDescInput">Description</label>
+          <input type="text" id="expenseDescInput" required maxlength="120" placeholder="e.g. Groceries" />
+        </div>
+        <div class="form-grid">
+          <div class="form-row">
+            <label for="expenseAmountInput">Amount</label>
+            <input type="text" id="expenseAmountInput" inputmode="decimal" required placeholder="0.00" />
+          </div>
+          <div class="form-row">
+            <label for="expensePaidBySelect">Paid by</label>
+            <select id="expensePaidBySelect"></select>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div class="form-row">
+            <label for="expenseCategorySelect">Category</label>
+            <select id="expenseCategorySelect">
+              <option value="general">🧾 General</option>
+              <option value="food">🍔 Food</option>
+              <option value="rent">🏠 Rent</option>
+              <option value="transport">🚗 Transport</option>
+              <option value="fun">🎉 Fun</option>
+              <option value="utilities">💡 Utilities</option>
+              <option value="travel">✈️ Travel</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="expenseDateInput">Date</label>
+            <input type="date" id="expenseDateInput" required />
+          </div>
+        </div>
+
+        <div class="form-row">
+          <label id="splitModeLabel">Split</label>
+          <div class="split-tabs" role="tablist" aria-labelledby="splitModeLabel" id="splitTabs">
+            <button type="button" class="split-tab active" data-mode="equal" role="tab" aria-selected="true">Equal</button>
+            <button type="button" class="split-tab" data-mode="exact" role="tab" aria-selected="false">Exact</button>
+            <button type="button" class="split-tab" data-mode="percent" role="tab" aria-selected="false">Percent</button>
+            <button type="button" class="split-tab" data-mode="shares" role="tab" aria-selected="false">Shares</button>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <label>Participants</label>
+          <div id="participantsList"></div>
+        </div>
+
+        <div class="split-preview" id="splitPreview" aria-live="polite"></div>
+
+        <div class="form-row">
+          <label for="expenseNoteInput">Note (optional)</label>
+          <textarea id="expenseNoteInput" maxlength="300"></textarea>
+        </div>
+
+        <p class="form-error" id="expenseFormError" role="alert"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary" id="expenseSubmitBtn">Save expense</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ========================== Settle up modal ========================== -->
+  <div class="modal-overlay" id="settleModalOverlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settleModalTitle">
+      <div class="modal-header">
+        <h2 id="settleModalTitle">Settle up</h2>
+        <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog">✕</button>
+      </div>
+      <form id="settleForm">
+        <div class="form-grid">
+          <div class="form-row">
+            <label for="settleFromSelect">From</label>
+            <select id="settleFromSelect"></select>
+          </div>
+          <div class="form-row">
+            <label for="settleToSelect">To</label>
+            <select id="settleToSelect"></select>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div class="form-row">
+            <label for="settleAmountInput">Amount</label>
+            <input type="text" id="settleAmountInput" inputmode="decimal" required placeholder="0.00" />
+          </div>
+          <div class="form-row">
+            <label for="settleDateInput">Date</label>
+            <input type="date" id="settleDateInput" required />
+          </div>
+        </div>
+        <p class="form-error" id="settleFormError" role="alert"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Record settlement</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Script order per spec: model, store, workflows, app -->
+  <script src="js/model.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/workflows.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
