@@ -1443,13 +1443,80 @@ SW.App = SW.App || {};
   }
 
   function wireAuthEvents() {
-    var googleBtn = qs('#googleSignInBtn');
-    if (googleBtn) {
-      googleBtn.addEventListener('click', function () {
-        googleBtn.disabled = true;
-        SW.Auth.signInWithGoogle().catch(function (err) {
-          googleBtn.disabled = false;
-          showToast('Sign-in failed: ' + ((err && err.message) || 'unknown error'));
+    // The sign-in card doubles as the sign-up card; authMode says which.
+    var authMode = 'signin';
+
+    function setAuthMode(mode) {
+      authMode = mode;
+      var nameRow = qs('#authNameRow');
+      var submit = qs('#authSubmitBtn');
+      var prompt = qs('#authSwitchPrompt');
+      var switchBtn = qs('#authSwitchBtn');
+      var password = qs('#authPasswordInput');
+      var error = qs('#authError');
+
+      if (error) error.textContent = '';
+      if (nameRow) nameRow.hidden = mode !== 'signup';
+      if (submit) submit.textContent = mode === 'signup' ? 'Create account' : 'Sign in';
+      if (prompt) prompt.textContent = mode === 'signup' ? 'Already have an account?' : 'No account yet?';
+      if (switchBtn) switchBtn.textContent = mode === 'signup' ? 'Sign in' : 'Create one';
+      // Tells a password manager whether to offer a saved password or a new one.
+      if (password) {
+        password.setAttribute('autocomplete', mode === 'signup' ? 'new-password' : 'current-password');
+      }
+    }
+
+    var switchBtn = qs('#authSwitchBtn');
+    if (switchBtn) {
+      switchBtn.addEventListener('click', function () {
+        setAuthMode(authMode === 'signup' ? 'signin' : 'signup');
+        var focusEl = authMode === 'signup' ? qs('#authNameInput') : qs('#authEmailInput');
+        if (focusEl) focusEl.focus();
+      });
+    }
+
+    var authForm = qs('#authForm');
+    if (authForm) {
+      authForm.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var errorEl = qs('#authError');
+        var submitBtn = qs('#authSubmitBtn');
+        var email = (qs('#authEmailInput') || {}).value || '';
+        var password = (qs('#authPasswordInput') || {}).value || '';
+        var name = (qs('#authNameInput') || {}).value || '';
+
+        if (errorEl) errorEl.textContent = '';
+
+        if (!email.trim()) {
+          if (errorEl) errorEl.textContent = 'Enter your email address.';
+          return;
+        }
+        if (password.length < 8) {
+          if (errorEl) errorEl.textContent = 'Password must be at least 8 characters.';
+          return;
+        }
+        if (authMode === 'signup' && !name.trim()) {
+          if (errorEl) errorEl.textContent = 'Enter the name your friends will see.';
+          return;
+        }
+
+        if (submitBtn) submitBtn.disabled = true;
+        var pending = authMode === 'signup'
+          ? SW.Auth.signUp(email, password, name)
+          : SW.Auth.signInWithPassword(email, password);
+
+        pending.then(function (result) {
+          if (submitBtn) submitBtn.disabled = false;
+          if (result && result.ok) {
+            // onChange swaps the app into shared mode; just clear the form.
+            authForm.reset();
+            return;
+          }
+          if (errorEl) {
+            errorEl.textContent = (result && result.error) || 'Could not sign in.';
+          }
+          // Account made but not yet usable: put them on the sign-in tab.
+          if (result && result.needsConfirmation) setAuthMode('signin');
         });
       });
     }
@@ -1552,8 +1619,8 @@ SW.App = SW.App || {};
       return;
     }
 
-    // Reflect later sign-ins and sign-outs (including the redirect back
-    // from Google, which lands on this page as a fresh load).
+    // Reflect later sign-ins and sign-outs, including a session restored
+    // from a previous visit.
     SW.Auth.onChange(function () {
       if (SW.Auth.isSignedIn()) {
         if (!isRemote()) startRemoteMode();

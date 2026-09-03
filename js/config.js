@@ -16,7 +16,7 @@
 // 3. Save this file and reload the page.
 //
 // See SETUP.md for the full walkthrough (running the schema, turning on
-// Google sign-in, etc).
+// email + password sign-in, etc).
 //
 // -----------------------------------------------------------------------
 // Why it's safe to commit the anon key, but NOT the service_role key
@@ -42,7 +42,7 @@ var SW = SW || {};
 
 SW.Config = {
   SUPABASE_URL: 'https://yfswchnkhsgdyxgqzsqm.supabase.co',
-  SUPABASE_ANON_KEY: '' // the long "anon" "public" key from Project Settings -> API
+  SUPABASE_ANON_KEY: '' // the "sb_publishable_..." key (older projects: "anon" "public")
 };
 
 // isConfigured() is true only once BOTH values above have been filled in

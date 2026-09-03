@@ -958,15 +958,31 @@ select#groupCurrencySelect {
   margin-bottom: 24px;
 }
 
-.auth-google-btn {
-  gap: 10px;
-  padding: 10px 14px;
+/* The sign-in card's form. Fields are left-aligned inside an otherwise
+   centred card, because labels above centred inputs read badly. */
+#authForm {
+  text-align: left;
+  margin-bottom: 14px;
 }
 
-.google-icon {
-  width: 18px;
-  height: 18px;
-  flex: 0 0 auto;
+#authForm .form-row {
+  margin-bottom: 14px;
+}
+
+#authSubmitBtn {
+  margin-top: 4px;
+}
+
+/* "No account yet? Create one" — the sign-in / sign-up toggle. */
+.auth-switch {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 0 0 14px;
+}
+
+.auth-switch .link-btn {
+  font-size: 13px;
+  margin-left: 4px;
 }
 
 .link-btn {

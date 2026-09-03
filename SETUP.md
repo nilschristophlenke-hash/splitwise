@@ -1,12 +1,13 @@
 # Setup guide — connecting Splitwise to Supabase
 
 This turns the app from a single-device demo into a real multi-user app with
-Google sign-in. It assumes you have never used Supabase before, and it should
-take about 15 minutes.
+email-and-password sign-in. It assumes you have never used Supabase before,
+and it should take about 10 minutes.
 
-You will touch three places: **Supabase** (the database + auth backend),
-**Google Cloud** (so "Continue with Google" works), and **this project's
-`js/config.js`** (so the app knows which Supabase project to talk to).
+You will touch two places: **Supabase** (the database and auth backend) and
+**this project's `js/config.js`** (so the app knows which Supabase project to
+talk to). There is no third-party login provider to set up — accounts live in
+your own database.
 
 If you skip this whole guide, the app still works — it just falls back to
 the old local-only demo mode (data stays in your browser, nobody else sees
@@ -60,84 +61,69 @@ it). Nothing breaks by not configuring Supabase.
 
 ---
 
-## 3. Turn on Google sign-in
+## 3. Turn on email + password sign-in
 
-This has two halves: a Google Cloud OAuth client (so Google knows about your
-app), and telling Supabase about it.
+This app uses Supabase's own email-and-password accounts. There is no Google
+sign-in and no other outside identity provider — the only parties involved are
+the person signing in and your own Supabase project.
 
-### 3a. Create the Google OAuth client
+### 3a. Check the provider is on
 
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
-   Create a new project (top-left project dropdown → **New Project**) or
-   pick an existing one you're happy to use for this.
-2. Go to **APIs & Services → OAuth consent screen**.
-   - User type: **External** (unless you have a Google Workspace org and
-     want to restrict it).
-   - Fill in an app name (e.g. "Splitwise"), your email as support/contact
-     email, and save. You can leave scopes at the default (email, profile).
-   - If prompted about "Publishing status", **Testing** is fine to start —
-     add your own Google account under **Test users** so you can sign in
-     while it's unpublished. Click **Publish app** later if you want anyone
-     to be able to sign in without being added as a test user.
-3. Go to **APIs & Services → Credentials → Create Credentials → OAuth client
-   ID**.
-   - Application type: **Web application**.
-   - Name: anything, e.g. "Splitwise web".
-   - **Authorized redirect URIs** — this is the field that must be exact.
-     Add exactly this one URL (swap in your own project ref if it differs
-     from the one below):
+In the Supabase dashboard: **Authentication → Sign In / Providers → Email**.
+It is enabled by default. Make sure **Enable email provider** is on.
 
-     ```
-     https://yfswchnkhsgdyxgqzsqm.supabase.co/auth/v1/callback
-     ```
+### 3b. Decide about email confirmation
 
-     This is **Supabase's** callback address, not your site's address —
-     Google sends the user back to Supabase first, and Supabase then
-     forwards them on to your app. Do not put your Vercel URL here.
-   - Leave "Authorized JavaScript origins" empty — it isn't needed for this
-     flow.
-   - Click **Create**. You'll be shown a **Client ID** and **Client
-     secret** — keep this tab open, you need both in the next step.
+By default Supabase emails every new account a confirmation link, and the
+person cannot sign in until they click it. That link is sent through
+Supabase's shared test mail service, which is heavily rate-limited and often
+lands in spam — for a small friend group it usually causes more problems than
+it solves.
 
-### 3b. Enable the provider in Supabase
+**Recommended for a friend group:** in **Authentication → Sign In / Providers
+→ Email**, turn **Confirm email** *off*. New accounts then work immediately.
 
-1. Back in the Supabase dashboard: **Authentication → Providers**, find
-   **Google** in the list and click it to expand.
-2. Toggle it **Enabled**.
-3. Paste the **Client ID** and **Client secret** from step 3a.
-4. Click **Save**.
+Be aware of what you are trading away: with confirmation off, nobody proves
+they own the address they typed, so someone could sign up as
+`your.friend@example.com` without having access to that mailbox. That matters
+much less here than it would in most apps, because an account on its own gets
+you nothing — you only ever see a group's expenses after someone shares that
+group's invite code with you. If you would rather keep confirmation on, leave
+it on and set up your own SMTP under **Project Settings → Auth → SMTP
+Settings**, otherwise the confirmation emails will be unreliable.
 
-### 3c. Tell Supabase which URLs are allowed to receive a login redirect
+### 3c. Set the site URL
 
-1. Still in **Authentication**, go to **URL Configuration**.
-2. **Site URL**: set this to your live site:
-   ```
-   https://splitwise-delta-wine.vercel.app
-   ```
-3. **Additional Redirect URLs**: add each of these on its own line —
-   ```
-   https://splitwise-delta-wine.vercel.app/*
-   http://localhost:8000/*
-   ```
-   The `/*` wildcard covers the page whether it's loaded as `/` or
-   `/index.html`. Add `http://127.0.0.1:8000/*` too if you sometimes use
-   that address instead of `localhost` when testing locally.
-4. Click **Save**.
+**Authentication → URL Configuration:**
 
----
+- **Site URL:** `https://splitwise-delta-wine.vercel.app`
+- **Additional Redirect URLs:** add `http://localhost:8000` if you want to run
+  it locally too.
+
+Password sign-in does not redirect anywhere, so this matters far less than it
+does for OAuth — but Supabase uses the Site URL in any email it does send, so
+it is worth setting correctly.
 
 ## 4. Paste your keys into the app
 
 1. Open `js/config.js` in this repo.
-2. Paste in the **Project URL** and **anon key** from step 1:
+2. Paste in the **Project URL** and the **publishable** key from step 1.
+   Newer projects name the keys `sb_publishable_…` and `sb_secret_…`; older
+   ones call the same two things `anon` `public` and `service_role`. You want
+   the first of each pair:
    ```js
    SW.Config = {
      SUPABASE_URL: 'https://yfswchnkhsgdyxgqzsqm.supabase.co',
-     SUPABASE_ANON_KEY: 'eyJ...your-anon-key...',
+     SUPABASE_ANON_KEY: 'sb_publishable_...your-key...',
    };
    ```
-3. Save the file. (Reminder: the anon key is fine to commit — see step 1.
-   Never put a `service_role` key in this file.)
+3. Save the file.
+
+> **Only ever paste the publishable key here.** A key beginning
+> `sb_secret_` (or a `service_role` key) bypasses every security rule in the
+> database. This app is a static site, so anything in `config.js` is
+> downloadable by anyone who visits — a secret key there would let any
+> visitor read, change or delete every group's expenses.
 
 ---
 
@@ -154,7 +140,7 @@ git push
 Vercel picks up the push and redeploys automatically — check the
 [Vercel dashboard](https://vercel.com) if you want to watch it happen. Once
 it's live, open https://splitwise-delta-wine.vercel.app and you should see
-a sign-in screen with a "Continue with Google" button.
+a sign-in screen asking for an email address and a password.
 
 To test locally first, run a static server from the project root (e.g.
 `python3 -m http.server 8000`) and open `http://localhost:8000` — this is
@@ -164,25 +150,31 @@ exactly why `http://localhost:8000/*` is in the redirect allow-list above.
 
 ## Troubleshooting
 
-### `Error 400: redirect_uri_mismatch` on the Google screen
-Google is refusing the request because the redirect URI Supabase sent it
-doesn't exactly match what's in your Google Cloud OAuth client. Almost
-always this means the **Authorized redirect URIs** field in Google Cloud
-(step 3a) doesn't exactly equal:
-```
-https://<your-project-ref>.supabase.co/auth/v1/callback
-```
-Check for a typo, a missing/extra trailing slash, or `http` vs `https`.
-Changes in Google Cloud can take a few minutes to take effect.
+### "Invalid API key"
 
-### "requested path is invalid" after logging in with Google
-This is Supabase, not Google, refusing the redirect — it means the page
-you landed back on isn't in Supabase's **Authentication → URL
-Configuration → Additional Redirect URLs** list (step 3c). Double check the
-Site URL and the additional redirect URLs match exactly where the app is
-actually hosted, including using the `/*` wildcard so both `/` and
-`/index.html` are covered, and that you added `http://localhost:8000/*` if
-you're testing locally.
+The key in `js/config.js` is wrong, or it is the wrong *kind* of key. It must
+be the **publishable** key (`sb_publishable_…`, shown as `anon` `public` on
+older projects). If you pasted a key starting `sb_secret_…`, remove it — see
+the security note at the bottom.
+
+### "Email not confirmed" when signing in
+
+The account exists but Supabase is waiting for the confirmation link. Either
+click the link in the email, or turn **Confirm email** off (step 3b) and try
+again. Existing unconfirmed users can be confirmed by hand in
+**Authentication → Users**.
+
+### "Account created. Check your email…" but no email arrives
+
+Supabase's built-in mail service is rate-limited and frequently filtered as
+spam. Turn **Confirm email** off (step 3b), or configure your own SMTP.
+
+### Sign-up says the user is already registered
+
+That email already has an account — use **Sign in** instead. If you have
+forgotten the password, delete the user in **Authentication → Users** and sign
+up again (there is no password-reset flow in this app yet, because that would
+need working email delivery).
 
 ### Signed in, but groups/expenses show up empty
 This is almost always Row Level Security correctly doing its job, not a
@@ -217,10 +209,14 @@ order by tablename;
 `rowsecurity` should read `true` for every row.
 
 ### Security reminder
-- The **anon** key is designed to be public. It's meant to sit in
-  client-side JavaScript and be visible in the browser's network tab —
-  that's normal and expected.
-- The **service_role** key is not designed to be public. It skips Row Level
-  Security entirely. It should never appear in this repo, in `config.js`,
-  or in any file you commit. If you ever paste it in by accident, treat it
-  as compromised: go to Project Settings → API and roll (regenerate) it.
+- The **publishable** key (`sb_publishable_…`, or `anon` `public` on older
+  projects) is designed to be public. It is meant to sit in client-side
+  JavaScript and be visible in the browser's network tab — that is normal.
+  It is safe only because the Row Level Security policies in
+  `supabase/schema.sql` constrain what it can do.
+- The **secret** key (`sb_secret_…`, or `service_role`) is the opposite: it
+  bypasses Row Level Security entirely. It must never appear in this repo,
+  in `config.js`, in a commit, or in a chat window. If it is ever exposed,
+  assume it is compromised and roll it immediately in
+  **Project Settings → API Keys**. Rolling it is cheap; a leaked secret key
+  means anyone can read and delete the whole database.

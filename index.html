@@ -77,15 +77,39 @@
         A shared expense tracker for friends, roommates and trips — split
         costs fairly and keep track of who owes who.
       </p>
-      <button type="button" class="btn btn-primary btn-block auth-google-btn" id="googleSignInBtn">
-        <svg class="google-icon" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
-          <path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.9c1.7-1.57 2.7-3.87 2.7-6.62z"/>
-          <path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.9-2.26c-.8.54-1.84.86-3.06.86-2.35 0-4.34-1.59-5.05-3.72H.9v2.33A9 9 0 0 0 9 18z"/>
-          <path fill="#FBBC05" d="M3.95 10.7A5.4 5.4 0 0 1 3.67 9c0-.59.1-1.17.28-1.7V4.97H.9A9 9 0 0 0 0 9c0 1.45.35 2.83.9 4.03l3.05-2.33z"/>
-          <path fill="#EA4335" d="M9 3.58c1.32 0 2.51.46 3.44 1.35l2.58-2.58C13.46.89 11.43 0 9 0A9 9 0 0 0 .9 4.97L3.95 7.3C4.66 5.17 6.65 3.58 9 3.58z"/>
-        </svg>
-        Continue with Google
-      </button>
+      <!-- Email + password, handled entirely by Supabase Auth. No Google,
+           no external identity provider: the only parties involved are the
+           user and this project's own database. -->
+      <form id="authForm" novalidate>
+        <div class="form-row" id="authNameRow" hidden>
+          <label for="authNameInput">Your name</label>
+          <input type="text" id="authNameInput" autocomplete="name"
+                 maxlength="60" placeholder="e.g. Nils" />
+          <p class="hint">This is what your friends will see next to each expense.</p>
+        </div>
+
+        <div class="form-row">
+          <label for="authEmailInput">Email</label>
+          <input type="email" id="authEmailInput" autocomplete="email"
+                 required placeholder="you@example.com" />
+        </div>
+
+        <div class="form-row">
+          <label for="authPasswordInput">Password</label>
+          <input type="password" id="authPasswordInput" required minlength="8"
+                 autocomplete="current-password" placeholder="At least 8 characters" />
+        </div>
+
+        <p class="form-error" id="authError" role="alert"></p>
+
+        <button type="submit" class="btn btn-primary btn-block" id="authSubmitBtn">Sign in</button>
+      </form>
+
+      <p class="auth-switch">
+        <span id="authSwitchPrompt">No account yet?</span>
+        <button type="button" class="link-btn" id="authSwitchBtn">Create one</button>
+      </p>
+
       <button type="button" class="link-btn auth-demo-btn" id="tryDemoBtn">Try the demo without an account</button>
       <p class="auth-hint">Demo data stays only in this browser — it is not shared with anyone.</p>
     </div>

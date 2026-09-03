@@ -1,6 +1,9 @@
 // js/auth.js
 //
-// SW.Auth - thin wrapper around Supabase Auth (Google sign-in).
+// SW.Auth - thin wrapper around Supabase Auth (email + password).
+//
+// No third-party identity provider is involved: accounts live in this
+// project's own Supabase database and nowhere else.
 //
 // Every function here is safe to call even when Supabase isn't configured
 // yet (js/config.js left blank), or when the browser refuses storage
@@ -167,24 +170,23 @@ SW.Auth = (function () {
     return !!currentUser;
   }
 
-  // Kicks off the Google OAuth redirect. Resolves with {ok:true} once the
-  // redirect has been *started* (the browser navigates away, so nothing
-  // meaningful happens after that in this page load) or {ok:false, error}
-  // if it could not even be started (e.g. unconfigured).
-  function signInWithGoogle() {
+  // Email + password sign-in, handled entirely by Supabase Auth. There is
+  // no third-party identity provider involved: the only parties are the
+  // person signing in and this project's own database.
+  //
+  // Both functions resolve to {ok:true} or {ok:false, error} and never
+  // reject, so callers can branch without a try/catch of their own.
+  function signInWithPassword(email, password) {
     var sb = client();
     if (!sb) {
       return Promise.resolve({ ok: false, error: 'Supabase is not configured yet.' });
     }
     try {
       return sb.auth
-        .signInWithOAuth({
-          provider: 'google',
-          options: { redirectTo: window.location.origin + window.location.pathname }
-        })
+        .signInWithPassword({ email: String(email || '').trim(), password: String(password || '') })
         .then(function (result) {
           if (result && result.error) {
-            return { ok: false, error: result.error.message || String(result.error) };
+            return { ok: false, error: friendlyAuthError(result.error) };
           }
           return { ok: true };
         })
@@ -194,6 +196,69 @@ SW.Auth = (function () {
     } catch (err) {
       return Promise.resolve({ ok: false, error: (err && err.message) || String(err) });
     }
+  }
+
+  // Creates an account. `name` is stored in the user's metadata as
+  // full_name, which the handle_new_user() trigger copies into the
+  // profiles table - that is what your friends see next to an expense.
+  //
+  // If the project still has "Confirm email" switched on, Supabase creates
+  // the user but returns no session, so we say so plainly instead of
+  // leaving the person staring at a form that looks like it failed.
+  function signUp(email, password, name) {
+    var sb = client();
+    if (!sb) {
+      return Promise.resolve({ ok: false, error: 'Supabase is not configured yet.' });
+    }
+    try {
+      return sb.auth
+        .signUp({
+          email: String(email || '').trim(),
+          password: String(password || ''),
+          options: { data: { full_name: String(name || '').trim() } }
+        })
+        .then(function (result) {
+          if (result && result.error) {
+            return { ok: false, error: friendlyAuthError(result.error) };
+          }
+          var data = result && result.data;
+          if (data && data.user && !data.session) {
+            return {
+              ok: false,
+              needsConfirmation: true,
+              error: 'Account created. Check your email for a confirmation link, then sign in.'
+            };
+          }
+          return { ok: true };
+        })
+        .catch(function (err) {
+          return { ok: false, error: (err && err.message) || String(err) };
+        });
+    } catch (err) {
+      return Promise.resolve({ ok: false, error: (err && err.message) || String(err) });
+    }
+  }
+
+  // Supabase's raw messages are terse and occasionally alarming; these are
+  // the ones people actually hit.
+  function friendlyAuthError(error) {
+    var message = (error && error.message) || String(error);
+    if (/invalid login credentials/i.test(message)) {
+      return 'That email and password do not match an account.';
+    }
+    if (/user already registered/i.test(message)) {
+      return 'There is already an account with that email — sign in instead.';
+    }
+    if (/password should be at least/i.test(message)) {
+      return 'Password must be at least 8 characters.';
+    }
+    if (/email not confirmed/i.test(message)) {
+      return 'This account still needs to be confirmed by email before you can sign in.';
+    }
+    if (/rate limit|too many/i.test(message)) {
+      return 'Too many attempts — wait a moment and try again.';
+    }
+    return message;
   }
 
   // Signs out and clears the local user immediately either way, so the UI
@@ -240,7 +305,8 @@ SW.Auth = (function () {
     init: init,
     getUser: getUser,
     isSignedIn: isSignedIn,
-    signInWithGoogle: signInWithGoogle,
+    signInWithPassword: signInWithPassword,
+    signUp: signUp,
     signOut: signOut,
     onChange: onChange
   };
