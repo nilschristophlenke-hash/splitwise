@@ -34,10 +34,23 @@ SW.App = SW.App || {};
   // esc() escapes a value so it is safe to drop into innerHTML. We never
   // insert a user-supplied string (group name, member name, description,
   // note...) into the page without passing it through this first.
+  //
+  // It escapes the five characters that matter in HTML. The quotes are the
+  // important part: this string gets dropped into attribute values like
+  // aria-label="..." and value="...", and a stray double quote there would
+  // let a crafted member name close the attribute and add its own event
+  // handler. (Escaping via a detached element's textContent looks tidier
+  // but only escapes & < >, which is exactly the hole described above.)
   function esc(value) {
-    var div = document.createElement('div');
-    div.textContent = value === null || value === undefined ? '' : String(value);
-    return div.innerHTML;
+    if (value === null || value === undefined) {
+      return '';
+    }
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   var CATEGORY_ICONS = {
@@ -307,8 +320,13 @@ SW.App = SW.App || {};
       return;
     }
 
+    // Replacing innerHTML resets scrollTop, which would otherwise throw the
+    // reader back to the top of a long expense list every time anything
+    // changed - including just expanding a row to see its breakdown.
+    var previousScroll = mainEl.scrollTop;
     mainEl.innerHTML = renderGroupViewHTML(group, state);
     wireGroupView(group, state);
+    mainEl.scrollTop = previousScroll;
   }
 
   function renderNoGroupsEmptyState() {
@@ -710,9 +728,10 @@ SW.App = SW.App || {};
 
     showToast(expense.type === 'settlement' ? 'Settlement deleted' : 'Expense deleted', {
       undo: function () {
+        var restored;
         if (expense.type === 'settlement') {
           var receiver = expense.participants[0] || {};
-          SW.Store.dispatch({
+          restored = SW.Store.dispatch({
             type: 'ADD_SETTLEMENT',
             payload: {
               groupId: expense.groupId,
@@ -723,7 +742,7 @@ SW.App = SW.App || {};
             }
           });
         } else {
-          SW.Store.dispatch({
+          restored = SW.Store.dispatch({
             type: 'ADD_EXPENSE',
             payload: {
               groupId: expense.groupId,
@@ -738,7 +757,14 @@ SW.App = SW.App || {};
             }
           });
         }
-        showToast('Restored');
+        // Restoring can legitimately fail - e.g. a member involved in this
+        // expense was removed between the delete and the undo. Saying
+        // "Restored" regardless would be a lie.
+        if (restored && restored.ok) {
+          showToast('Restored');
+        } else {
+          showToast((restored && restored.error) || 'Could not restore.');
+        }
       }
     });
   }

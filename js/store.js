@@ -59,6 +59,22 @@ SW.Store = (function () {
     return state.groups.find(function (g) { return g.id === groupId; }) || null;
   }
 
+  // "Who am I" is stored once, globally, but each group has its own
+  // members - so on switching to a group the current user may not belong
+  // to, we adopt that group's first member. Without this the header shows
+  // one person while state.ui.currentUserId still points at someone from
+  // the previous group, and every "you owe / you lent" figure quietly
+  // reads as "not involved".
+  function adoptCurrentUserFor(group) {
+    if (!group || !group.members.length) return;
+    var stillAMember = group.members.some(function (m) {
+      return m.id === state.ui.currentUserId;
+    });
+    if (!stillAMember) {
+      state.ui.currentUserId = group.members[0].id;
+    }
+  }
+
   function findExpenseAndGroup(expenseId) {
     for (var i = 0; i < state.expenses.length; i++) {
       if (state.expenses[i].id === expenseId) {
@@ -303,6 +319,7 @@ SW.Store = (function () {
       var group = findGroup(payload.groupId);
       if (!group) return { ok: false, error: 'Group not found.' };
       state.ui.currentGroupId = group.id;
+      adoptCurrentUserFor(group);
       return { ok: true };
     },
 
@@ -334,6 +351,7 @@ SW.Store = (function () {
       }
 
       group.members = group.members.filter(function (m) { return m.id !== member.id; });
+      adoptCurrentUserFor(group);
       addActivity('member', 'Removed ' + member.name + ' from "' + group.name + '".');
       return { ok: true };
     },
@@ -471,6 +489,7 @@ SW.Store = (function () {
       var check = validateStateShape(payload.state);
       if (!check.ok) return check;
       state = deepClone(payload.state);
+      adoptCurrentUserFor(findGroup(state.ui.currentGroupId));
       addActivity('system', 'Imported state from a JSON file.');
       return { ok: true };
     },
@@ -483,6 +502,7 @@ SW.Store = (function () {
   function init() {
     var loaded = loadFromStorage();
     state = loaded || buildDemoState();
+    adoptCurrentUserFor(findGroup(state.ui.currentGroupId));
     if (!loaded) persist();
     notify();
   }
@@ -514,11 +534,21 @@ SW.Store = (function () {
       if (!action || typeof action !== 'object' || typeof action.type !== 'string') {
         return { ok: false, error: 'Action must be an object with a string "type".' };
       }
+      // hasOwnProperty rather than a plain lookup: every object inherits
+      // names like "toString" and "constructor", so handlers['toString']
+      // would find an inherited function and call it, and dispatch would
+      // hand back whatever that returned instead of an {ok, error} result.
+      if (!Object.prototype.hasOwnProperty.call(handlers, action.type)) {
+        return { ok: false, error: 'Unknown action type: ' + action.type };
+      }
       var handler = handlers[action.type];
-      if (!handler) {
+      if (typeof handler !== 'function') {
         return { ok: false, error: 'Unknown action type: ' + action.type };
       }
       var result = handler(action.payload || {});
+      if (!result || typeof result !== 'object' || typeof result.ok !== 'boolean') {
+        return { ok: false, error: 'Handler for ' + action.type + ' returned no result.' };
+      }
       if (result && result.ok) {
         persist();
         notify();

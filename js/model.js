@@ -121,6 +121,52 @@ SW.Model = (function () {
   // correctly and pass them through.
   // -----------------------------------------------------------------------
 
+  // Percentages are floats, so comparing their sum to 100 needs a little
+  // slack - 33.33 + 33.33 + 33.33 is 99.98999999999998 in binary floating
+  // point, not 99.99. The tolerance is the documented +/-0.01 plus a hair
+  // so that a sum exactly 0.01 away still passes.
+  var PERCENT_TOLERANCE = 0.0100001;
+
+  // Finite, non-NaN number. Infinity and NaN both sneak past a naive
+  // `value > 0` test and poison every later calculation, so weights get
+  // checked with this instead.
+  function isUsableNumber(value) {
+    return typeof value === 'number' && isFinite(value);
+  }
+
+  // Turns fractional per-person amounts (which together come to
+  // amountCents) into whole cents that STILL come to amountCents.
+  // Everyone gets their floor; the leftover cents then go one each to
+  // whoever lost the most to flooring, largest fractional part first,
+  // ties broken by original position so the result is deterministic.
+  //
+  // Every split mode funnels through here. That is deliberate: when exact
+  // mode rounded each person's value on its own instead, three people
+  // splitting 1.00 as 33.5/33.5/33 came to 101 cents.
+  function allocateLargestRemainder(amountCents, raw) {
+    var floors = raw.map(Math.floor);
+    var allocated = floors.reduce(function (a, b) { return a + b; }, 0);
+    var remainder = amountCents - allocated;
+
+    var order = raw.map(function (r, i) { return { i: i, frac: r - floors[i] }; });
+    order.sort(function (a, b) {
+      if (b.frac !== a.frac) return b.frac - a.frac;
+      return a.i - b.i;
+    });
+
+    var out = floors.slice();
+    for (var k = 0; k < remainder; k++) {
+      out[order[k % order.length].i] += 1;
+    }
+    return out;
+  }
+
+  function buildShares(participants, cents) {
+    return participants.map(function (p, i) {
+      return { memberId: p.memberId, shareCents: cents[i] };
+    });
+  }
+
   function splitExpense(amountCents, splitMode, participants) {
     if (!Number.isInteger(amountCents) || amountCents < 0) {
       return { ok: false, error: 'amountCents must be a non-negative integer.' };
@@ -128,18 +174,26 @@ SW.Model = (function () {
     if (!Array.isArray(participants) || participants.length === 0) {
       return { ok: false, error: 'At least one participant is required.' };
     }
+    if (!participants.every(function (p) { return p && typeof p === 'object'; })) {
+      return { ok: false, error: 'Every participant must be an object.' };
+    }
+
+    var values = participants.map(function (p) { return p.value; });
 
     if (splitMode === 'exact') {
-      var exactSum = 0;
-      for (var i = 0; i < participants.length; i++) exactSum += participants[i].value;
-      if (Math.round(exactSum) !== amountCents) {
+      // The caller already supplied per-person cent amounts, so there is
+      // nothing to divide - but they still go through the allocator so
+      // that fractional input cannot make the shares miss the total.
+      if (!values.every(function (v) { return isUsableNumber(v) && v >= 0; })) {
+        return { ok: false, error: 'Exact amounts must be non-negative numbers.' };
+      }
+      var exactSum = values.reduce(function (a, b) { return a + b; }, 0);
+      if (Math.abs(exactSum - amountCents) > 0.5) {
         return { ok: false, error: 'Exact amounts must sum to the total amount.' };
       }
       return {
         ok: true,
-        shares: participants.map(function (p) {
-          return { memberId: p.memberId, shareCents: Math.round(p.value) };
-        }),
+        shares: buildShares(participants, allocateLargestRemainder(amountCents, values)),
       };
     }
 
@@ -147,14 +201,17 @@ SW.Model = (function () {
     if (splitMode === 'equal') {
       weights = participants.map(function () { return 1; });
     } else if (splitMode === 'shares') {
-      weights = participants.map(function (p) { return p.value; });
-      if (weights.some(function (w) { return !(w > 0); })) {
+      weights = values;
+      if (!weights.every(function (w) { return isUsableNumber(w) && w > 0; })) {
         return { ok: false, error: 'Shares must be positive numbers.' };
       }
     } else if (splitMode === 'percent') {
-      weights = participants.map(function (p) { return p.value; });
+      weights = values;
+      if (!weights.every(function (w) { return isUsableNumber(w) && w >= 0; })) {
+        return { ok: false, error: 'Percentages must be non-negative numbers.' };
+      }
       var percentSum = weights.reduce(function (a, b) { return a + b; }, 0);
-      if (Math.abs(percentSum - 100) > 0.01) {
+      if (Math.abs(percentSum - 100) > PERCENT_TOLERANCE) {
         return { ok: false, error: 'Percentages must sum to 100.' };
       }
     } else {
@@ -166,31 +223,10 @@ SW.Model = (function () {
       return { ok: false, error: 'Total weight must be positive.' };
     }
 
-    // 1) Exact (fractional) share of each participant, and its floor.
     var raw = weights.map(function (w) { return (amountCents * w) / totalWeight; });
-    var floors = raw.map(Math.floor);
-    var allocated = floors.reduce(function (a, b) { return a + b; }, 0);
-    var remainder = amountCents - allocated;
-
-    // 2) Hand out the leftover cents to whoever lost the most to
-    //    flooring, largest fractional remainder first; ties go to
-    //    whichever participant appears earlier in the input array.
-    var order = raw.map(function (r, i) { return { i: i, frac: r - floors[i] }; });
-    order.sort(function (a, b) {
-      if (b.frac !== a.frac) return b.frac - a.frac;
-      return a.i - b.i;
-    });
-
-    var shareCents = floors.slice();
-    for (var k = 0; k < remainder; k++) {
-      shareCents[order[k].i] += 1;
-    }
-
     return {
       ok: true,
-      shares: participants.map(function (p, idx) {
-        return { memberId: p.memberId, shareCents: shareCents[idx] };
-      }),
+      shares: buildShares(participants, allocateLargestRemainder(amountCents, raw)),
     };
   }
 
@@ -225,30 +261,36 @@ SW.Model = (function () {
       errors.push('At least one participant is required.');
     }
     var everyoneIsAMember = participants.every(function (p) {
-      return memberIds.indexOf(p.memberId) !== -1;
+      return p && memberIds.indexOf(p.memberId) !== -1;
     });
     if (participants.length > 0 && !everyoneIsAMember) {
       errors.push('All participants must be members of the group.');
     }
 
-    if (participants.length > 0 && everyoneIsAMember) {
-      if (draft.splitMode === 'exact') {
-        var sum = participants.reduce(function (a, p) { return a + p.value; }, 0);
-        if (Math.round(sum) !== draft.amountCents) {
-          errors.push('Exact amounts must add up to the total amount.');
-        }
-      } else if (draft.splitMode === 'percent') {
-        var pctSum = participants.reduce(function (a, p) { return a + p.value; }, 0);
-        if (Math.abs(pctSum - 100) > 0.01) {
-          errors.push('Percentages must add up to 100.');
-        }
-      } else if (draft.splitMode === 'shares') {
-        var allPositive = participants.every(function (p) { return p.value > 0; });
-        if (!allPositive) {
-          errors.push('Shares must be positive numbers.');
-        }
-      } else if (draft.splitMode !== 'equal') {
-        errors.push('Unknown split mode: ' + draft.splitMode);
+    // The same person listed twice would be charged two shares while some
+    // other member silently gets none.
+    var seen = {};
+    var hasDuplicate = participants.some(function (p) {
+      if (!p) return false;
+      if (seen[p.memberId]) return true;
+      seen[p.memberId] = true;
+      return false;
+    });
+    if (hasDuplicate) {
+      errors.push('Each participant may only be listed once.');
+    }
+
+    // The mode-specific rules (sums, signs, finiteness) live in
+    // splitExpense, and this asks splitExpense directly rather than
+    // repeating them. Keeping one copy is the point: when the validator
+    // rounded the total and splitExpense rounded each share separately,
+    // an exact split of 1.00 as 33.5/33.5/33 passed validation and then
+    // produced 101 cents.
+    if (participants.length > 0 && everyoneIsAMember && !hasDuplicate &&
+        Number.isInteger(draft.amountCents) && draft.amountCents > 0) {
+      var split = splitExpense(draft.amountCents, draft.splitMode, participants);
+      if (!split.ok) {
+        errors.push(split.error);
       }
     }
 

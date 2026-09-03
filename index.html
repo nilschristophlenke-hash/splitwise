@@ -23,7 +23,10 @@
           <div id="dataMenu" class="dropdown-menu" hidden role="menu">
             <button type="button" id="exportBtn" role="menuitem">Export JSON</button>
             <button type="button" id="importBtn" role="menuitem">Import JSON…</button>
-            <input type="file" id="importFileInput" accept="application/json" class="visually-hidden" />
+            <!-- Kept in the accessibility tree (not `hidden`) because the
+                 Import button forwards clicks to it, so it needs a name. -->
+            <input type="file" id="importFileInput" accept="application/json"
+                   class="visually-hidden" aria-label="Choose a JSON file to import" />
             <hr />
             <button type="button" id="demoBtn" role="menuitem">Load demo data</button>
             <button type="button" id="resetBtn" role="menuitem">Reset all data</button>

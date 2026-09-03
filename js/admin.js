@@ -527,6 +527,9 @@ var SW = SW || {};
     var edges = [];
     entities.forEach(function (ent) {
       (ent.relations || []).forEach(function (rel) {
+        // Everything else here treats missing/odd data defensively; a
+        // non-string relation would be the one thing left that throws.
+        if (typeof rel !== 'string') return;
         names.forEach(function (other) {
           if (other && other !== ent.entity && rel.indexOf(other) !== -1) {
             edges.push({ from: ent.entity, to: other, label: rel });
@@ -838,6 +841,14 @@ var SW = SW || {};
     var checks = [];
 
     // 1. Balances sum to zero, per group.
+    // Two assertions in one, because the zero-sum half alone is close to a
+    // tautology: computeBalances credits the payer the full amount and
+    // debits shares that splitExpense guarantees add up to that same
+    // amount, so it nets to zero almost no matter how bad the data is.
+    // What CAN go wrong is an expense being silently skipped - splitExpense
+    // rejects it, computeBalances ignores it, and the record then shows in
+    // the expense list and the "total spent" figure while contributing
+    // nothing to anyone's balance. That is the failure this catches.
     (function () {
       var allOk = true;
       var details = [];
@@ -850,7 +861,22 @@ var SW = SW || {};
           var sum = Object.keys(balances).reduce(function (s, k) { return s + balances[k]; }, 0);
           if (sum !== 0) {
             allOk = false;
-            details.push(g.name + ': sum=' + sum);
+            details.push(g.name + ': balances sum to ' + sum + ', not 0');
+          }
+
+          var skipped = expenses.filter(function (e) {
+            if (e.groupId !== g.id) return false;
+            var split = SW.Model.splitExpense(e.amountCents, e.splitMode, e.participants);
+            return !split.ok;
+          });
+          if (skipped.length) {
+            allOk = false;
+            details.push(
+              g.name + ': ' + skipped.length + ' record(s) counted in totals but ' +
+              'skipped in balances (' + skipped.map(function (e) {
+                return e.description;
+              }).join(', ') + ')'
+            );
           }
         } catch (e) {
           allOk = false;
@@ -858,7 +884,7 @@ var SW = SW || {};
         }
       });
       checks.push({
-        name: 'Balances sum to zero (every group)',
+        name: 'Balances sum to zero, and no record is skipped',
         pass: allOk,
         detail: details.join('; '),
       });

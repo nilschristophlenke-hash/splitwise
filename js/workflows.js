@@ -175,11 +175,13 @@ SW.Workflows = (function () {
         { n: 1, actor: 'View', action: 'Load scripts in order', detail: 'Classic <script> tags load js/model.js, js/store.js, js/workflows.js, then js/app.js (or js/admin.js), so SW.Model and SW.Store exist before the view code runs.', file: 'index.html' },
         { n: 2, actor: 'View', action: 'SW.Store.subscribe(render)', detail: 'The view registers a render callback so every future state change repaints the UI.', file: 'js/app.js' },
         { n: 3, actor: 'Store', action: 'SW.Store.init()', detail: 'Tries to load and shape-validate "splitwise.state.v1" from localStorage; on any failure (missing, corrupt JSON, wrong version/shape) it falls back to buildDemoState() instead.', file: 'js/store.js' },
-        { n: 4, actor: 'Store', action: 'notify()', detail: 'Calls every subscriber once with the initial state snapshot, triggering the first render.', file: 'js/store.js' },
+        { n: 4, actor: 'Store', action: 'adoptCurrentUserFor(current group)', detail: 'Whether the state came from storage or from buildDemoState(), init() re-points ui.currentUserId at the current group\'s first member if the loaded value isn\'t actually a member of that group.', file: 'js/store.js' },
+        { n: 5, actor: 'Store', action: 'notify()', detail: 'Calls every subscriber once with the initial state snapshot, triggering the first render.', file: 'js/store.js' },
       ],
       invariants: [
         'state always has version, groups, expenses, activity and ui after init()',
         'init() never throws, even if localStorage is unavailable or holds garbage',
+        'after init(), ui.currentUserId is a member of ui.currentGroupId\'s group whenever that group has members',
       ],
       failureModes: [
         { case: 'localStorage throws (private mode) or holds corrupt/old-version JSON', handling: 'loadFromStorage() catches the error / fails validateStateShape() and returns null; init() falls back to buildDemoState(), so the app always ends up with valid state.' },
@@ -205,6 +207,58 @@ SW.Workflows = (function () {
       ],
     },
     {
+      id: 'select-group',
+      title: 'Select a group',
+      trigger: 'User clicks a group in the sidebar list',
+      purpose: "Switch the app's focus to a different group, keeping ui.currentUserId meaningful for that group.",
+      steps: [
+        { n: 1, actor: 'View', action: 'dispatch SELECT_GROUP', detail: 'dispatch({type:"SELECT_GROUP", payload:{groupId}}).', file: 'js/app.js' },
+        { n: 2, actor: 'Store', action: 'handlers.SELECT_GROUP', detail: 'Confirms the group exists, sets ui.currentGroupId to it.', file: 'js/store.js' },
+        { n: 3, actor: 'Store', action: 'adoptCurrentUserFor(group)', detail: 'ui.currentUserId is stored globally but membership is per-group; if the stored currentUserId is not a member of the newly-selected group, it is re-pointed at group.members[0]. Without this, every "you owe / you lent" figure would silently read as "not involved" after switching to a group the current user isn\'t in.', file: 'js/store.js' },
+      ],
+      invariants: [
+        'after a successful SELECT_GROUP, ui.currentUserId is always a member of ui.currentGroupId\'s group (as long as that group has at least one member)',
+      ],
+      failureModes: [
+        { case: 'groupId does not exist', handling: '{ok:false, error:"Group not found."} - ui.currentGroupId is left unchanged.' },
+      ],
+    },
+    {
+      id: 'rename-group',
+      title: 'Rename a group',
+      trigger: 'User clicks "Rename" on the current group and confirms the browser prompt',
+      purpose: "Change a group's display name without touching its members or expenses.",
+      steps: [
+        { n: 1, actor: 'View', action: 'window.prompt for the new name', detail: 'Pre-filled with the current name; a null result (Cancel) or an empty/whitespace-only trimmed value aborts before any dispatch.', file: 'js/app.js' },
+        { n: 2, actor: 'View', action: 'dispatch RENAME_GROUP', detail: 'dispatch({type:"RENAME_GROUP", payload:{groupId, name}}).', file: 'js/app.js' },
+        { n: 3, actor: 'Store', action: 'handlers.RENAME_GROUP', detail: 'Confirms the group exists and the trimmed name is non-empty, sets group.name, appends an activity item.', file: 'js/store.js' },
+      ],
+      invariants: ['a group\'s id, members and expenses are untouched by a rename'],
+      failureModes: [
+        { case: 'groupId does not exist', handling: '{ok:false, error:"Group not found."}' },
+        { case: 'empty name', handling: '{ok:false, error:"Group name is required."}' },
+      ],
+    },
+    {
+      id: 'delete-group',
+      title: 'Delete a group',
+      trigger: 'User clicks "Delete" on the current group and confirms the browser confirm() dialog',
+      purpose: 'Permanently remove a group together with every expense and settlement that belongs to it.',
+      steps: [
+        { n: 1, actor: 'View', action: 'window.confirm(...)', detail: 'Warns that the group and all its expenses will be deleted and this cannot be undone; a "Cancel" result aborts before any dispatch.', file: 'js/app.js' },
+        { n: 2, actor: 'View', action: 'dispatch DELETE_GROUP', detail: 'dispatch({type:"DELETE_GROUP", payload:{groupId}}).', file: 'js/app.js' },
+        { n: 3, actor: 'Store', action: 'handlers.DELETE_GROUP', detail: 'Confirms the group exists, then filters it out of state.groups AND filters every expense/settlement whose groupId matches it out of state.expenses - a group delete is also a cascading expense delete.', file: 'js/store.js' },
+        { n: 4, actor: 'Store', action: 'Fix up ui.currentGroupId', detail: 'If the deleted group was the current one, ui.currentGroupId is reset to the first remaining group\'s id, or null if none are left; appends an activity item.', file: 'js/store.js' },
+      ],
+      invariants: [
+        'after DELETE_GROUP, no expense in state.expenses references the deleted group\'s id',
+        'ui.currentGroupId never points at a group that no longer exists',
+      ],
+      failureModes: [
+        { case: 'groupId does not exist', handling: '{ok:false, error:"Group not found."} - nothing removed.' },
+      ],
+    },
+    {
       id: 'add-member',
       title: 'Add a member to a group',
       trigger: 'User submits "Add member" from within a group',
@@ -221,6 +275,27 @@ SW.Workflows = (function () {
       ],
     },
     {
+      id: 'remove-member',
+      title: 'Remove a member from a group',
+      trigger: 'User clicks the remove button next to a member in the group view',
+      purpose: "Shrink a group's roster, but only when doing so can't silently orphan money already recorded against that member.",
+      steps: [
+        { n: 1, actor: 'View', action: 'dispatch REMOVE_MEMBER', detail: 'dispatch({type:"REMOVE_MEMBER", payload:{groupId, memberId}}).', file: 'js/app.js' },
+        { n: 2, actor: 'Store', action: 'handlers.REMOVE_MEMBER', detail: 'Confirms the group and member exist, then scans state.expenses for any record in this group where the member is either paidBy or listed in participants.', file: 'js/store.js' },
+        { n: 3, actor: 'Store', action: 'Reject if the member is used', detail: 'If the member appears in any existing expense or settlement (as payer or participant), the removal is rejected outright - nothing is mutated.', file: 'js/store.js' },
+        { n: 4, actor: 'Store', action: 'Commit', detail: 'Otherwise filters the member out of group.members, calls adoptCurrentUserFor(group) in case the removed member was the current user, appends an activity item.', file: 'js/store.js' },
+      ],
+      invariants: [
+        'a member can never be removed while any expense or settlement in the group still references their id',
+        'after a successful removal, ui.currentUserId is re-pointed at group.members[0] if it was the removed member',
+      ],
+      failureModes: [
+        { case: 'groupId does not exist', handling: '{ok:false, error:"Group not found."}' },
+        { case: 'memberId is not a member of that group', handling: '{ok:false, error:"Member not found."}' },
+        { case: 'the member appears in an existing expense (as payer or participant)', handling: '{ok:false, error:"Cannot remove " + name + " - they appear in an existing expense."} - the member and every expense are left untouched.' },
+      ],
+    },
+    {
       id: 'add-expense',
       title: 'Add an expense',
       trigger: 'User submits the Add/Edit expense modal in "add" mode',
@@ -230,7 +305,7 @@ SW.Workflows = (function () {
         { n: 2, actor: 'Model', action: 'parseAmount(amountText)', detail: 'Converts the typed amount ("12,50", "€12.50", ...) into integer cents, or null if unparseable.', file: 'js/model.js' },
         { n: 3, actor: 'View', action: 'dispatch ADD_EXPENSE', detail: 'dispatch({type:"ADD_EXPENSE", payload:{groupId, description, amountCents, paidBy, splitMode, participants, category, date, note}}).', file: 'js/app.js' },
         { n: 4, actor: 'Store', action: 'handlers.ADD_EXPENSE', detail: 'Builds a draft object and calls SW.Model.validateExpense(draft, group).', file: 'js/store.js' },
-        { n: 5, actor: 'Model', action: 'validateExpense', detail: 'Checks description, amountCents > 0, paidBy is a member, at least one participant who is all a member, and mode-specific sum rules.', file: 'js/model.js' },
+        { n: 5, actor: 'Model', action: 'validateExpense', detail: 'Checks description, amountCents > 0, paidBy is a member, at least one participant who is all a member, and that no memberId appears twice in participants. It does NOT re-implement the mode-specific sum/sign rules itself - it delegates to splitExpense(amountCents, splitMode, participants) and surfaces that error, so the validator and the allocator can never disagree.', file: 'js/model.js' },
         { n: 6, actor: 'Store', action: 'Commit or reject', detail: 'If invalid, returns {ok:false, error} without mutating state. If valid, pushes a new Expense (type:"expense"), appends an activity item, persists, notifies.', file: 'js/store.js' },
       ],
       invariants: [
@@ -238,9 +313,31 @@ SW.Workflows = (function () {
         'amountCents is always a positive integer',
       ],
       failureModes: [
-        { case: 'percent split does not sum to 100% (±0.01 tolerance)', handling: 'validateExpense adds an error; dispatch returns {ok:false}; nothing is persisted; the modal shows the message.' },
+        { case: 'percent split does not sum to 100% (tolerance PERCENT_TOLERANCE = 0.0100001, i.e. ~±0.01)', handling: 'splitExpense returns {ok:false, error}; validateExpense surfaces it; dispatch returns {ok:false}; nothing is persisted; the modal shows the message.' },
         { case: 'payer is not a member of the group', handling: 'same - rejected before any mutation.' },
-        { case: 'amount field does not parse (parseAmount returns null)', handling: 'the view treats it as amountCents:NaN, which validateExpense also rejects with "Amount must be a positive whole number of cents."' },
+        { case: 'the same memberId appears twice in participants', handling: 'validateExpense adds "Each participant may only be listed once." before splitExpense is even called.' },
+        { case: 'amount field does not parse (parseAmount returns null)', handling: 'js/app.js passes amountCents:null straight through in the ADD_EXPENSE payload; validateExpense rejects it (Number.isInteger(null) is false) with "Amount must be a positive whole number of cents."' },
+      ],
+    },
+    {
+      id: 'edit-expense',
+      title: 'Edit an existing expense',
+      trigger: 'User clicks the edit button on an expense/settlement row, then submits the same modal used for "Add an expense"',
+      purpose: 'Change any field of an already-recorded expense (description, amount, payer, split, category, date, note) while re-validating it exactly as strictly as a brand-new one.',
+      steps: [
+        { n: 1, actor: 'View', action: 'openExpenseModal(group, expense)', detail: 'The same modal as "Add an expense" opens pre-filled from the existing record and sets ui.editingExpenseId = expense.id, which is what tells the submit handler to dispatch UPDATE_EXPENSE instead of ADD_EXPENSE.', file: 'js/app.js' },
+        { n: 2, actor: 'View', action: 'dispatch UPDATE_EXPENSE', detail: 'dispatch({type:"UPDATE_EXPENSE", payload:{expenseId, patch:{description, amountCents, paidBy, splitMode, participants, category, date, note}}}) - patch carries the full current form state, not a sparse diff.', file: 'js/app.js' },
+        { n: 3, actor: 'Store', action: 'handlers.UPDATE_EXPENSE', detail: 'Looks the expense (and its group) up by id; builds a draft that takes each of description/amountCents/paidBy/splitMode/participants from patch when patch defines it, otherwise falls back to the expense\'s current value.', file: 'js/store.js' },
+        { n: 4, actor: 'Model', action: 'validateExpense(draft, group)', detail: 'The exact same validation used by ADD_EXPENSE runs against the merged draft.', file: 'js/model.js' },
+        { n: 5, actor: 'Store', action: 'Commit or reject', detail: 'If invalid, returns {ok:false, error} and the stored expense is untouched. If valid, overwrites the expense\'s description/amountCents/paidBy/splitMode/participants in place, and conditionally overwrites category/date/note only if patch defines them; appends an activity item ("Updated \\"...\\"."); persists; notifies.', file: 'js/store.js' },
+      ],
+      invariants: [
+        'the edited expense keeps its original id, groupId, type and createdAt',
+        'an edited expense passes SW.Model.validateExpense against its group just like a newly-added one',
+      ],
+      failureModes: [
+        { case: 'expenseId does not exist (e.g. deleted in another tab)', handling: '{ok:false, error:"Expense not found."}' },
+        { case: 'the edited draft fails validateExpense (bad amount, non-member payer, bad split sums, duplicate participant, ...)', handling: '{ok:false, error} - the stored expense is left exactly as it was; the modal shows the message.' },
       ],
     },
     {
@@ -249,17 +346,17 @@ SW.Workflows = (function () {
       trigger: "Any time shares must be derived from an expense's (amountCents, splitMode, participants) - the live preview in the expense modal, and every computeBalances pass",
       purpose: 'Turn an amount plus a split mode into exact per-member cent shares that always sum to the total, with no floating-point drift.',
       steps: [
-        { n: 1, actor: 'Model', action: 'splitExpense(amountCents, splitMode, participants)', detail: 'For "exact", the caller-supplied cent values are used directly after confirming they sum to amountCents. For "equal"/"shares"/"percent", each participant gets a weight (1, share count, or percentage).', file: 'js/model.js' },
-        { n: 2, actor: 'Model', action: 'Floor + largest-remainder', detail: 'Computes each participant\'s exact real-valued share, floors it, sums the floors, and hands the few leftover cents one at a time to the participants with the largest fractional remainder (ties broken by participant order).', file: 'js/model.js' },
+        { n: 1, actor: 'Model', action: 'splitExpense(amountCents, splitMode, participants)', detail: 'Every mode reduces to a non-negative weight per participant: 1 for "equal", the supplied share count for "shares", the supplied percentage for "percent", and the supplied cent value for "exact". Mode-specific validation runs first (finiteness, sign, sum-to-100 for percent, sum-to-amountCents for exact), then ALL modes - "exact" included - are handed to the same allocateLargestRemainder(amountCents, raw) helper, so exact mode can no longer round each person\'s share independently and miss the total.', file: 'js/model.js' },
+        { n: 2, actor: 'Model', action: 'Floor + largest-remainder', detail: 'Computes each participant\'s exact real-valued share (raw), floors it, sums the floors, and hands the few leftover cents one at a time to the participants with the largest fractional remainder (ties broken by participant order).', file: 'js/model.js' },
       ],
       invariants: [
-        'sum(shareCents) === amountCents exactly, for every split mode',
+        'sum(shareCents) === amountCents exactly, for every split mode, including "exact"',
         'every shareCents value is an integer',
       ],
       failureModes: [
-        { case: 'exact values do not sum to amountCents', handling: '{ok:false, error}' },
-        { case: 'percent values do not sum to 100 (±0.01)', handling: '{ok:false, error}' },
-        { case: 'a shares value is <= 0', handling: '{ok:false, error}' },
+        { case: 'exact values are negative, non-finite, or do not sum to amountCents (±0.5 cent tolerance)', handling: '{ok:false, error}' },
+        { case: 'percent values are negative, non-finite, or do not sum to 100 (tolerance PERCENT_TOLERANCE = 0.0100001, i.e. ~±0.01)', handling: '{ok:false, error}' },
+        { case: 'a shares value is non-finite or <= 0', handling: '{ok:false, error}' },
       ],
     },
     {
@@ -340,16 +437,20 @@ SW.Workflows = (function () {
       trigger: 'Every dispatch() call whose handler returns {ok:true}, plus explicit reset()/seedDemo()',
       purpose: 'Keep localStorage in sync with in-memory state without ever letting a storage failure break the app.',
       steps: [
-        { n: 1, actor: 'Store', action: 'persist()', detail: "JSON.stringify(state) into localStorage['splitwise.state.v1'], wrapped in try/catch.", file: 'js/store.js' },
-        { n: 2, actor: 'Store', action: 'notify()', detail: 'Hands every subscriber a deep copy of the new state (structuredClone, with a JSON round-trip fallback).', file: 'js/store.js' },
+        { n: 1, actor: 'Store', action: 'dispatch() routes the action', detail: 'Looks up handlers[action.type] using Object.prototype.hasOwnProperty.call(handlers, action.type) rather than a plain handlers[action.type] lookup, so an action.type like "toString" or "constructor" cannot resolve to an inherited Object.prototype function instead of a real handler. Also checks that the handler actually returned an object with a boolean .ok before treating the result as valid.', file: 'js/store.js' },
+        { n: 2, actor: 'Store', action: 'persist()', detail: "JSON.stringify(state) into localStorage['splitwise.state.v1'], wrapped in try/catch.", file: 'js/store.js' },
+        { n: 3, actor: 'Store', action: 'notify()', detail: 'Hands every subscriber a deep copy of the new state (structuredClone, with a JSON round-trip fallback).', file: 'js/store.js' },
       ],
       invariants: [
         'a failed dispatch (ok:false) never calls persist() or notify()',
         'getState() never returns a reference a caller could use to mutate the store\'s internals',
+        'an unknown or inherited-property action.type always yields {ok:false, error:"Unknown action type: ..."}, never an inherited function\'s return value',
       ],
       failureModes: [
         { case: 'localStorage.setItem throws (private mode, quota exceeded)', handling: 'caught and ignored - the app keeps running in-memory only, for the rest of that session.' },
         { case: 'localStorage is undefined (e.g. running under Node)', handling: 'persist()/loadFromStorage() short-circuit to a no-op / null.' },
+        { case: 'action.type is not an own property of handlers (e.g. "toString", "constructor", or simply unrecognized)', handling: '{ok:false, error:"Unknown action type: " + action.type} - nothing is mutated, persisted, or notified.' },
+        { case: 'a handler returns something other than {ok: boolean, ...}', handling: 'dispatch returns {ok:false, error:"Handler for " + action.type + " returned no result."} instead of trusting the malformed result.' },
       ],
     },
     {
@@ -362,10 +463,12 @@ SW.Workflows = (function () {
         { n: 2, actor: 'View', action: 'Read the chosen file', detail: 'Reads the file\'s text and calls SW.Store.importJSON(text).', file: 'js/app.js' },
         { n: 3, actor: 'Store', action: 'importJSON(str)', detail: 'JSON.parses the string (catching parse errors), then dispatches IMPORT_STATE with the parsed object.', file: 'js/store.js' },
         { n: 4, actor: 'Store', action: 'handlers.IMPORT_STATE', detail: 'Runs validateStateShape (version === 1; groups/expenses/activity arrays present; every group/expense has the required fields) before ever replacing the live state.', file: 'js/store.js' },
+        { n: 5, actor: 'Store', action: 'adoptCurrentUserFor(imported current group)', detail: 'After replacing state with the deep-cloned imported candidate, re-points ui.currentUserId at that group\'s first member if the imported currentUserId isn\'t one of its members - an imported file can easily carry a currentUserId that doesn\'t belong to its own currentGroupId.', file: 'js/store.js' },
       ],
       invariants: [
         'state is only ever replaced by a candidate that passed validateStateShape',
         'a rejected import leaves the current state completely untouched',
+        'after a successful import, ui.currentUserId is a member of ui.currentGroupId\'s group whenever that group has members',
       ],
       failureModes: [
         { case: 'the chosen file is not valid JSON', handling: 'importJSON returns {ok:false, error:"That file is not valid JSON."}' },
@@ -391,6 +494,22 @@ SW.Workflows = (function () {
         { case: 'wrong password', handling: 'the card shakes and shows an error message; sessionStorage is left untouched.' },
       ],
     },
+    {
+      id: 'set-current-user',
+      title: 'Set "who am I"',
+      trigger: 'User changes the current-user <select> in the header',
+      purpose: 'Tell the app which member is "you", so balances/activity can be framed as "you owe" / "you lent" instead of purely neutral figures.',
+      steps: [
+        { n: 1, actor: 'View', action: 'dispatch SET_CURRENT_USER', detail: 'dispatch({type:"SET_CURRENT_USER", payload:{memberId}}) on the select\'s change event.', file: 'js/app.js' },
+        { n: 2, actor: 'Store', action: 'handlers.SET_CURRENT_USER', detail: 'null/undefined memberId clears ui.currentUserId to null unconditionally. Otherwise, confirms memberId belongs to some member of some group in state.groups before accepting it.', file: 'js/store.js' },
+      ],
+      invariants: [
+        'ui.currentUserId is either null or the id of a member that exists in at least one group at the moment it is set',
+      ],
+      failureModes: [
+        { case: 'memberId does not match any member in any group', handling: '{ok:false, error:"Member not found."} - ui.currentUserId is left unchanged.' },
+      ],
+    },
   ];
 
   // =========================================================================
@@ -403,13 +522,18 @@ SW.Workflows = (function () {
       name: 'Largest-remainder cent allocation',
       problem:
         'Split an integer number of cents across N participants, proportional to arbitrary ' +
-        'positive weights (equal shares, share counts, or percentages), without losing or ' +
-        'inventing a single cent to floating-point rounding.',
+        'non-negative weights (equal shares, share counts, or percentages), without losing or ' +
+        'inventing a single cent to floating-point rounding. Every splitExpense mode - ' +
+        'including "exact" - funnels through this same allocator (allocateLargestRemainder), ' +
+        'so the caller-supplied per-person cent amounts in "exact" mode cannot make the shares ' +
+        'miss the total either.',
       approach:
-        'Compute every participant\'s exact real-valued share (amountCents * weight / ' +
-        'totalWeight). Floor each one to get a first-pass integer allocation - this can only ' +
-        'ever under-allocate, never over-allocate. The few cents left over (amountCents minus ' +
-        'the sum of the floors) are then handed out one at a time to the participants with the ' +
+        'For "equal"/"shares"/"percent", compute every participant\'s exact real-valued share ' +
+        '(amountCents * weight / totalWeight); for "exact", the caller-supplied cent values are ' +
+        'used as that same "raw" input directly (after confirming they sum to amountCents). ' +
+        'Floor each raw value to get a first-pass integer allocation - this can only ever ' +
+        'under-allocate, never over-allocate. The few cents left over (amountCents minus the ' +
+        'sum of the floors) are then handed out one at a time to the participants with the ' +
         'largest fractional remainder, in order, breaking ties by original participant order. ' +
         'This guarantees the final sum is exactly amountCents, and spreads the rounding "loss" ' +
         'as fairly as possible.',
@@ -461,10 +585,13 @@ SW.Workflows = (function () {
         '    remove any entries whose amount is now 0\n' +
         '  return transfers   // at most n-1 transfers',
       worked_example:
-        'Balances A:+2000, B:-1000, C:-1000 -> round 1: creditor A, debtor B (tie with C ' +
-        'broken by id) -> transfer 1000 from B to A -> B settles to 0 and drops out -> ' +
-        'round 2: A:+1000, C:-1000 -> transfer 1000 from C to A -> both settle to 0. ' +
-        'Result: 2 transfers for 3 members (n-1).',
+        'Balances A:+2000, B:-1000, C:-1000 -> round 1: creditor A (only positive balance), ' +
+        'debtor is the LAST entry after sorting descending by amount with ties broken ' +
+        'ascending by id - B and C tie at -1000, so C sorts after B and is picked as debtor ' +
+        '-> transfer 1000 from C to A -> C settles to 0 and drops out -> round 2: A:+1000, ' +
+        'B:-1000 -> transfer 1000 from B to A -> both settle to 0. Result: 2 transfers for ' +
+        '3 members (n-1). Verified directly: simplifyDebts({A:2000,B:-1000,C:-1000}) -> ' +
+        '[{"from":"C","to":"A","amountCents":1000},{"from":"B","to":"A","amountCents":1000}].',
     },
   ];
 
@@ -485,7 +612,7 @@ SW.Workflows = (function () {
     ],
     transitions: [
       { from: 'boot', to: 'ready', on: 'SW.Store.init() completes and calls notify() for the first time' },
-      { from: 'ready', to: 'modal_open', on: 'user opens New group / Add expense / Settle up (or presses "n")' },
+      { from: 'ready', to: 'modal_open', on: 'user opens New group / Add expense / Settle up, or presses "n" (which opens Add-expense specifically, not the other modals)' },
       { from: 'modal_open', to: 'ready', on: 'dispatch returns {ok:true} on submit, or the user cancels / presses Esc' },
       { from: 'modal_open', to: 'validation_error', on: 'live validateExpense/parseAmount finds a problem, or dispatch returns {ok:false}' },
       { from: 'validation_error', to: 'modal_open', on: 'user edits a field and the live validity message recomputes' },

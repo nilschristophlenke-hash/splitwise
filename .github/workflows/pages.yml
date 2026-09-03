@@ -33,10 +33,13 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      # Pages must be enabled once by hand for this repo:
+      # Settings -> Pages -> Build and deployment -> Source: GitHub Actions.
+      # Auto-enablement is deliberately not used here: the workflow's built-in
+      # token cannot create a Pages site ("Resource not accessible by
+      # integration"), so it would only ever fail.
       - name: Configure Pages
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - name: Upload site
         uses: actions/upload-pages-artifact@v3
         with:

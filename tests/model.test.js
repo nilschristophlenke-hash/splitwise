@@ -246,6 +246,134 @@ assertEqual(Model.formatSigned(-1250, 'EUR'), '-€12.50', 'formatSigned(-1250, 
 })();
 
 // ===========================================================================
+// regression tests - each of these covers a bug that was actually found in
+// this code and fixed. They exist so it cannot come back silently.
+// ===========================================================================
+
+(function regressionExactModeRounding() {
+  // Was: exact mode rounded each participant's value on its own while the
+  // validity check rounded the total, so 1.00 split as 33.5/33.5/33 was
+  // accepted and then paid out 101 cents.
+  var r = Model.splitExpense(100, 'exact', [
+    { memberId: 'a', value: 33.5 },
+    { memberId: 'b', value: 33.5 },
+    { memberId: 'c', value: 33 },
+  ]);
+  var sum = r.ok ? r.shares.reduce(function (a, s) { return a + s.shareCents; }, 0) : -1;
+  assert(r.ok && sum === 100, 'regression: fractional exact amounts still sum to the total (got ' + sum + ')');
+
+  var r2 = Model.splitExpense(1000, 'exact', [
+    { memberId: 'a', value: 333.4 },
+    { memberId: 'b', value: 333.3 },
+    { memberId: 'c', value: 333.3 },
+  ]);
+  var sum2 = r2.ok ? r2.shares.reduce(function (a, s) { return a + s.shareCents; }, 0) : -1;
+  assert(r2.ok && sum2 === 1000, 'regression: fractional exact amounts round up to the total (got ' + sum2 + ')');
+})();
+
+(function regressionExactModeBalancesStayZero() {
+  var groups = [{ id: 'g1', name: 'G', currency: 'EUR', members: [
+    { id: 'a', name: 'A' }, { id: 'b', name: 'B' }, { id: 'c', name: 'C' },
+  ] }];
+  var expenses = [{
+    id: 'e1', groupId: 'g1', type: 'expense', description: 'x', amountCents: 100,
+    paidBy: 'a', splitMode: 'exact',
+    participants: [{ memberId: 'a', value: 33.5 }, { memberId: 'b', value: 33.5 }, { memberId: 'c', value: 33 }],
+    category: 'general', date: '2026-01-01', createdAt: 0, note: '',
+  }];
+  var balances = Model.computeBalances('g1', groups, expenses);
+  var total = Object.keys(balances).reduce(function (a, k) { return a + balances[k]; }, 0);
+  assert(total === 0, 'regression: a fractional exact split leaves balances summing to zero (got ' + total + ')');
+})();
+
+(function regressionNonFiniteWeights() {
+  // Infinity slipped past a `value > 0` test and produced NaN shares.
+  var inf = Model.splitExpense(1000, 'shares', [
+    { memberId: 'a', value: Infinity }, { memberId: 'b', value: 1 },
+  ]);
+  assert(!inf.ok, 'regression: Infinity is rejected as a share weight');
+
+  var nan = Model.splitExpense(1000, 'percent', [
+    { memberId: 'a', value: NaN }, { memberId: 'b', value: 50 },
+  ]);
+  assert(!nan.ok, 'regression: NaN is rejected as a percent weight');
+
+  var group = { id: 'g1', members: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }] };
+  var v = Model.validateExpense({
+    description: 'x', amountCents: 1000, paidBy: 'a', splitMode: 'percent',
+    participants: [{ memberId: 'a', value: NaN }, { memberId: 'b', value: 50 }],
+  }, group);
+  assert(!v.ok, 'regression: validateExpense also rejects a NaN percent (it used to slip through)');
+})();
+
+(function regressionNegativePercent() {
+  var r = Model.splitExpense(1000, 'percent', [
+    { memberId: 'a', value: 150.5 }, { memberId: 'b', value: -50.5 },
+  ]);
+  assert(!r.ok, 'regression: a negative percentage is rejected even though the total is 100');
+
+  var e = Model.splitExpense(100, 'exact', [
+    { memberId: 'a', value: 200 }, { memberId: 'b', value: -100 },
+  ]);
+  assert(!e.ok, 'regression: a negative exact amount is rejected even though the total matches');
+})();
+
+(function regressionDuplicateParticipants() {
+  var group = { id: 'g1', members: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }] };
+  var v = Model.validateExpense({
+    description: 'x', amountCents: 900, paidBy: 'a', splitMode: 'equal',
+    participants: [{ memberId: 'a', value: 1 }, { memberId: 'a', value: 1 }, { memberId: 'b', value: 1 }],
+  }, group);
+  assert(!v.ok, 'regression: the same member listed twice is rejected');
+})();
+
+(function regressionPercentTolerance() {
+  // 33.33 x 3 is 99.98999999999998 in floating point, so a naive
+  // "> 0.01" comparison rejected a sum that is exactly 0.01 away.
+  var r = Model.splitExpense(1000, 'percent', [
+    { memberId: 'a', value: 33.33 },
+    { memberId: 'b', value: 33.33 },
+    { memberId: 'c', value: 33.33 },
+  ]);
+  var sum = r.ok ? r.shares.reduce(function (a, s) { return a + s.shareCents; }, 0) : -1;
+  assert(r.ok && sum === 1000, 'regression: 33.33/33.33/33.33 is accepted and still totals the full amount');
+})();
+
+(function regressionValidatorAgreesWithAllocator() {
+  // The two used to encode the mode rules separately and drift apart.
+  // Anything the validator accepts must be something the allocator can
+  // actually split without losing a cent.
+  var group = { id: 'g1', members: [
+    { id: 'a', name: 'A' }, { id: 'b', name: 'B' }, { id: 'c', name: 'C' },
+  ] };
+  var modes = ['equal', 'exact', 'percent', 'shares'];
+  var disagreements = 0;
+  for (var i = 0; i < 3000; i++) {
+    var amount = 1 + Math.floor(Math.random() * 100000);
+    var mode = modes[Math.floor(Math.random() * modes.length)];
+    var ids = ['a', 'b', 'c'].slice(0, 1 + Math.floor(Math.random() * 3));
+    var participants = ids.map(function (id) {
+      var v = Math.random() < 0.15
+        ? [0, -1, NaN, Infinity, 1.5][Math.floor(Math.random() * 5)]
+        : Math.floor(Math.random() * 100);
+      return { memberId: id, value: v };
+    });
+    var valid = Model.validateExpense({
+      description: 'x', amountCents: amount, paidBy: 'a',
+      splitMode: mode, participants: participants,
+    }, group);
+    if (!valid.ok) continue;
+    var split = Model.splitExpense(amount, mode, participants);
+    if (!split.ok) { disagreements += 1; continue; }
+    var sum = split.shares.reduce(function (a, s) { return a + s.shareCents; }, 0);
+    if (sum !== amount) disagreements += 1;
+  }
+  assert(disagreements === 0,
+    'regression: over 3000 random drafts, everything the validator accepts splits exactly (' +
+    disagreements + ' disagreements)');
+})();
+
+// ===========================================================================
 // summary
 // ===========================================================================
 
