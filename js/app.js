@@ -4,7 +4,7 @@
 // This file wires the DOM (index.html) to the pure logic in js/model.js and
 // the state container in js/store.js. It never touches localStorage directly
 // and never mutates state by hand — every change goes through
-// SW.Store.dispatch(). Whenever the store changes, SW.Store.subscribe(render)
+// store().dispatch(). Whenever the store changes, store().subscribe(render)
 // re-renders the parts of the page that depend on state, so the UI is always
 // a reflection of "state + a little bit of local UI-only state" (which modal
 // is open, which expense row is expanded, what the in-progress expense form
@@ -100,6 +100,29 @@ SW.App = SW.App || {};
     participantValues: {},     // memberId -> raw string typed for exact/percent/shares
     lastFocusedEl: null        // element to restore focus to when a modal closes
   };
+
+  // --------------------------------------------------------------------
+  // Which store is live.
+  //
+  // Two stores implement the same API: SW.Store keeps everything in this
+  // browser's localStorage, and SW.RemoteStore keeps it in Supabase so a
+  // whole friend group shares one set of books. Everything below this point
+  // goes through store() and does not care which one it got.
+  // --------------------------------------------------------------------
+  var activeStore = null;
+
+  function store() {
+    return activeStore || SW.Store;
+  }
+
+  function isRemote() {
+    return !!(SW.RemoteStore && activeStore === SW.RemoteStore);
+  }
+
+  // True when there is a Supabase project configured to talk to at all.
+  function backendAvailable() {
+    return !!(window.SW && SW.Config && SW.Config.isConfigured() && SW.Auth && SW.Auth.client());
+  }
 
   var lastState = null;              // most recent state passed to render()
   var currentGroupForModal = null;   // group the expense modal is currently editing for
@@ -297,7 +320,7 @@ SW.App = SW.App || {};
 
     qsa('.group-btn', listEl).forEach(function (btn) {
       btn.addEventListener('click', function () {
-        SW.Store.dispatch({ type: 'SELECT_GROUP', payload: { groupId: btn.getAttribute('data-id') } });
+        store().dispatch({ type: 'SELECT_GROUP', payload: { groupId: btn.getAttribute('data-id') } });
       });
     });
   }
@@ -408,7 +431,12 @@ SW.App = SW.App || {};
         );
       })
       .join('');
-    return chips + ' <button type="button" class="btn btn-sm" id="addMemberBtn">+ Member</button>';
+    // Offline you invent members by typing a name. Signed in, a member is a
+    // real account, so the only way to add one is to share the invite code.
+    var action = isRemote()
+      ? ' <button type="button" class="btn btn-sm" id="inviteMemberBtn">Invite</button>'
+      : ' <button type="button" class="btn btn-sm" id="addMemberBtn">+ Member</button>';
+    return chips + action;
   }
 
   function renderBalancesPanel(group, state) {
@@ -634,7 +662,7 @@ SW.App = SW.App || {};
         if (name === null) return;
         var trimmed = name.trim();
         if (!trimmed) return;
-        var result = SW.Store.dispatch({ type: 'RENAME_GROUP', payload: { groupId: group.id, name: trimmed } });
+        var result = store().dispatch({ type: 'RENAME_GROUP', payload: { groupId: group.id, name: trimmed } });
         showToast(result && result.ok ? 'Group renamed' : (result && result.error) || 'Could not rename group.');
       });
     }
@@ -643,8 +671,17 @@ SW.App = SW.App || {};
     if (deleteBtn) {
       deleteBtn.addEventListener('click', function () {
         if (!window.confirm('Delete "' + group.name + '" and all its expenses? This cannot be undone.')) return;
-        var result = SW.Store.dispatch({ type: 'DELETE_GROUP', payload: { groupId: group.id } });
+        var result = store().dispatch({ type: 'DELETE_GROUP', payload: { groupId: group.id } });
         showToast(result && result.ok ? 'Group deleted' : (result && result.error) || 'Could not delete group.');
+      });
+    }
+
+    // Shared mode swaps "+ Member" for "Invite", since a member is an
+    // account that has to join rather than a name you can type in.
+    var inviteBtn = qs('#inviteMemberBtn');
+    if (inviteBtn) {
+      inviteBtn.addEventListener('click', function () {
+        openInviteModal(group);
       });
     }
 
@@ -655,7 +692,7 @@ SW.App = SW.App || {};
         if (name === null) return;
         var trimmed = name.trim();
         if (!trimmed) return;
-        var result = SW.Store.dispatch({ type: 'ADD_MEMBER', payload: { groupId: group.id, name: trimmed } });
+        var result = store().dispatch({ type: 'ADD_MEMBER', payload: { groupId: group.id, name: trimmed } });
         showToast(result && result.ok ? 'Member added' : (result && result.error) || 'Could not add member.');
       });
     }
@@ -663,7 +700,12 @@ SW.App = SW.App || {};
     qsa('.remove-member-btn', mainEl).forEach(function (btn) {
       btn.addEventListener('click', function () {
         var memberId = btn.getAttribute('data-member');
-        var result = SW.Store.dispatch({ type: 'REMOVE_MEMBER', payload: { groupId: group.id, memberId: memberId } });
+        // The local store calls it memberId, the remote store userId (there
+        // it really is an auth user id). Sending both keeps one call site.
+        var result = store().dispatch({
+          type: 'REMOVE_MEMBER',
+          payload: { groupId: group.id, memberId: memberId, userId: memberId }
+        });
         showToast(result && result.ok ? 'Member removed' : (result && result.error) || 'Cannot remove: member appears in an expense.');
       });
     });
@@ -676,7 +718,7 @@ SW.App = SW.App || {};
         var idx = parseInt(btn.getAttribute('data-idx'), 10);
         var s = suggestions[idx];
         if (!s) return;
-        var result = SW.Store.dispatch({
+        var result = store().dispatch({
           type: 'ADD_SETTLEMENT',
           payload: { groupId: group.id, from: s.from, to: s.to, amountCents: s.amountCents, date: todayISO() }
         });
@@ -716,11 +758,11 @@ SW.App = SW.App || {};
   }
 
   function deleteExpenseWithUndo(expenseId) {
-    var state = SW.Store.getState();
+    var state = store().getState();
     var expense = state.expenses.find(function (e) { return e.id === expenseId; });
     if (!expense) return;
 
-    var result = SW.Store.dispatch({ type: 'DELETE_EXPENSE', payload: { expenseId: expenseId } });
+    var result = store().dispatch({ type: 'DELETE_EXPENSE', payload: { expenseId: expenseId } });
     if (!result || !result.ok) {
       showToast((result && result.error) || 'Could not delete.');
       return;
@@ -731,7 +773,7 @@ SW.App = SW.App || {};
         var restored;
         if (expense.type === 'settlement') {
           var receiver = expense.participants[0] || {};
-          restored = SW.Store.dispatch({
+          restored = store().dispatch({
             type: 'ADD_SETTLEMENT',
             payload: {
               groupId: expense.groupId,
@@ -742,7 +784,7 @@ SW.App = SW.App || {};
             }
           });
         } else {
-          restored = SW.Store.dispatch({
+          restored = store().dispatch({
             type: 'ADD_EXPENSE',
             payload: {
               groupId: expense.groupId,
@@ -1062,10 +1104,10 @@ SW.App = SW.App || {};
 
       var result;
       if (ui.editingExpenseId) {
-        result = SW.Store.dispatch({ type: 'UPDATE_EXPENSE', payload: { expenseId: ui.editingExpenseId, patch: payload } });
+        result = store().dispatch({ type: 'UPDATE_EXPENSE', payload: { expenseId: ui.editingExpenseId, patch: payload } });
       } else {
         payload.groupId = group.id;
-        result = SW.Store.dispatch({ type: 'ADD_EXPENSE', payload: payload });
+        result = store().dispatch({ type: 'ADD_EXPENSE', payload: payload });
       }
 
       if (!result || !result.ok) {
@@ -1097,7 +1139,7 @@ SW.App = SW.App || {};
         return;
       }
 
-      var result = SW.Store.dispatch({
+      var result = store().dispatch({
         type: 'ADD_SETTLEMENT',
         payload: { groupId: group.id, from: from, to: to, amountCents: amountCents, date: date }
       });
@@ -1112,6 +1154,10 @@ SW.App = SW.App || {};
     qs('#newGroupBtn').addEventListener('click', function () {
       qs('#groupForm').reset();
       qs('#groupFormError').textContent = '';
+      // Typing member names is meaningless once members are real accounts:
+      // in shared mode people join with the invite code instead.
+      var membersRow = qs('#groupMembersRow');
+      if (membersRow) membersRow.hidden = isRemote();
       openModal(qs('#groupModalOverlay'));
       qs('#groupNameInput').focus();
     });
@@ -1132,7 +1178,12 @@ SW.App = SW.App || {};
         return;
       }
 
-      var result = SW.Store.dispatch({ type: 'ADD_GROUP', payload: { name: name, currency: currency, memberNames: memberNames } });
+      // Signed in, members are real accounts who join with the invite code,
+      // so there are no names to type here. Offline, they are just strings.
+      var payload = isRemote()
+        ? { name: name, currency: currency }
+        : { name: name, currency: currency, memberNames: memberNames };
+      var result = store().dispatch({ type: 'ADD_GROUP', payload: payload });
       if (!result || !result.ok) {
         errorEl.textContent = (result && result.error) || 'Could not create group.';
         return;
@@ -1142,7 +1193,7 @@ SW.App = SW.App || {};
     });
 
     qs('#currentUserSelect').addEventListener('change', function (e) {
-      SW.Store.dispatch({ type: 'SET_CURRENT_USER', payload: { memberId: e.target.value } });
+      store().dispatch({ type: 'SET_CURRENT_USER', payload: { memberId: e.target.value } });
     });
 
     // Data menu (export / import / reset / demo).
@@ -1168,7 +1219,7 @@ SW.App = SW.App || {};
     });
 
     qs('#exportBtn').addEventListener('click', function () {
-      var json = SW.Store.exportJSON();
+      var json = store().exportJSON();
       var blob = new Blob([json], { type: 'application/json' });
       var url = URL.createObjectURL(blob);
       var a = document.createElement('a');
@@ -1191,7 +1242,12 @@ SW.App = SW.App || {};
       if (!file) return;
       var reader = new FileReader();
       reader.onload = function () {
-        var result = SW.Store.importJSON(String(reader.result));
+        if (isRemote()) {
+          showToast('Importing a file is only available in demo mode.');
+          e.target.value = '';
+          return;
+        }
+        var result = store().importJSON(String(reader.result));
         showToast(result && result.ok ? 'Data imported' : (result && result.error) || 'Import failed: invalid file.');
         e.target.value = '';
       };
@@ -1204,14 +1260,27 @@ SW.App = SW.App || {};
     });
 
     qs('#resetBtn').addEventListener('click', function () {
+      // In shared mode this button would be a foot-gun: the data is not
+      // yours alone, and reset() only clears the local cache anyway, so it
+      // would look destructive while changing nothing for anyone else.
+      if (isRemote()) {
+        showToast('Reset is only available in demo mode. Delete a group instead.');
+        closeDataMenu();
+        return;
+      }
       if (!window.confirm('Reset all data? This deletes every group and expense and cannot be undone.')) return;
-      SW.Store.reset();
+      store().reset();
       closeDataMenu();
       showToast('All data reset');
     });
 
     qs('#demoBtn').addEventListener('click', function () {
-      SW.Store.seedDemo();
+      if (isRemote()) {
+        showToast('Demo data is only available in demo mode.');
+        closeDataMenu();
+        return;
+      }
+      store().seedDemo();
       closeDataMenu();
       showToast('Demo data loaded');
     });
@@ -1247,11 +1316,268 @@ SW.App = SW.App || {};
   // Boot
   // ========================================================================
 
+  // ---- account chip in the header ---------------------------------------
+  function renderAccount(user) {
+    var control = qs('#accountControl');
+    var select = qs('#currentUserSelect');
+    if (!control) return;
+
+    if (!user) {
+      control.hidden = true;
+      if (select) select.hidden = false;
+      return;
+    }
+
+    control.hidden = false;
+    // The user-picker only means something offline, where "who am I" is a
+    // guess. Signed in, the answer is not up for debate.
+    if (select) select.hidden = true;
+
+    var avatar = qs('#accountAvatar');
+    var initials = qs('#accountInitials');
+    var nameEl = qs('#accountName');
+    var name = user.name || user.email || 'Signed in';
+
+    if (nameEl) nameEl.textContent = name;
+
+    if (user.avatarUrl && avatar) {
+      avatar.src = user.avatarUrl;
+      avatar.alt = '';
+      avatar.hidden = false;
+      if (initials) initials.hidden = true;
+    } else {
+      if (avatar) avatar.hidden = true;
+      if (initials) {
+        initials.textContent = name.trim().charAt(0).toUpperCase() || '?';
+        initials.hidden = false;
+      }
+    }
+  }
+
+  // ---- "Saving… / Saved / Offline" indicator ------------------------------
+  var syncStatusTimer = null;
+
+  function setSyncStatus(status) {
+    var el = qs('#syncStatus');
+    if (!el) return;
+    clearTimeout(syncStatusTimer);
+
+    if (!status || status.state === 'idle') {
+      el.hidden = true;
+      return;
+    }
+
+    el.classList.toggle('is-error', status.state === 'error');
+    el.hidden = false;
+
+    if (status.state === 'saving') {
+      el.textContent = 'Saving…';
+    } else if (status.state === 'saved') {
+      el.textContent = 'Saved';
+      // "Saved" is reassurance, not information - let it fade out.
+      syncStatusTimer = setTimeout(function () { el.hidden = true; }, 1500);
+    } else {
+      el.textContent = status.message || 'Not saved — check your connection';
+      showToast(status.message || 'Could not save your change.');
+    }
+  }
+
+  // ---- boot paths --------------------------------------------------------
+  function showAuthScreen() {
+    var screen = qs('#authScreen');
+    if (screen) screen.hidden = false;
+    renderAccount(null);
+  }
+
+  function hideAuthScreen() {
+    var screen = qs('#authScreen');
+    if (screen) screen.hidden = true;
+  }
+
+  var subscribed = false;
+
+  function subscribeOnce() {
+    if (subscribed) return;
+    store().subscribe(render);
+    subscribed = true;
+  }
+
+  // Demo mode: everything stays in this browser, exactly as before Supabase
+  // existed. This is also the fallback whenever the backend is unreachable.
+  function startLocalMode() {
+    activeStore = SW.Store;
+    subscribed = false;
+    hideAuthScreen();
+    renderAccount(null);
+    setSyncStatus(null);
+    SW.Store.init();
+    subscribeOnce();
+    render(SW.Store.getState());
+  }
+
+  // Shared mode: one set of books for the whole group, in Supabase.
+  function startRemoteMode() {
+    activeStore = SW.RemoteStore;
+    subscribed = false;
+    hideAuthScreen();
+    renderAccount(SW.Auth.getUser());
+
+    if (typeof SW.RemoteStore.onSyncStatus === 'function') {
+      SW.RemoteStore.onSyncStatus(setSyncStatus);
+    }
+    subscribeOnce();
+    render(SW.RemoteStore.getState());
+
+    setSyncStatus({ state: 'saving' });
+    SW.RemoteStore.init()
+      .then(function () {
+        setSyncStatus({ state: 'saved' });
+        render(SW.RemoteStore.getState());
+      })
+      .catch(function (err) {
+        setSyncStatus({
+          state: 'error',
+          message: 'Could not load your groups: ' + ((err && err.message) || 'unknown error')
+        });
+      });
+  }
+
+  function wireAuthEvents() {
+    var googleBtn = qs('#googleSignInBtn');
+    if (googleBtn) {
+      googleBtn.addEventListener('click', function () {
+        googleBtn.disabled = true;
+        SW.Auth.signInWithGoogle().catch(function (err) {
+          googleBtn.disabled = false;
+          showToast('Sign-in failed: ' + ((err && err.message) || 'unknown error'));
+        });
+      });
+    }
+
+    var demoBtn = qs('#tryDemoBtn');
+    if (demoBtn) {
+      demoBtn.addEventListener('click', function () {
+        startLocalMode();
+      });
+    }
+
+    var signOutBtn = qs('#signOutBtn');
+    if (signOutBtn) {
+      signOutBtn.addEventListener('click', function () {
+        SW.Auth.signOut()
+          .then(function () {
+            if (SW.RemoteStore && typeof SW.RemoteStore.reset === 'function') {
+              SW.RemoteStore.reset();
+            }
+            activeStore = null;
+            subscribed = false;
+            showAuthScreen();
+          })
+          .catch(function (err) {
+            showToast('Could not sign out: ' + ((err && err.message) || 'unknown error'));
+          });
+      });
+    }
+
+    // ---- join a group with a code ----
+    var joinBtn = qs('#joinGroupBtn');
+    if (joinBtn) {
+      joinBtn.addEventListener('click', function () {
+        if (!isRemote()) {
+          showToast('Sign in to join a friend\'s group.');
+          return;
+        }
+        var err = qs('#joinError');
+        if (err) err.textContent = '';
+        var input = qs('#joinCodeInput');
+        if (input) input.value = '';
+        openModal(qs('#joinModal'));
+        if (input) input.focus();
+      });
+    }
+
+    var joinForm = qs('#joinModalForm');
+    if (joinForm) {
+      joinForm.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var input = qs('#joinCodeInput');
+        var errorEl = qs('#joinError');
+        var code = input ? input.value.trim() : '';
+        if (!code) {
+          if (errorEl) errorEl.textContent = 'Enter the invite code your friend sent you.';
+          return;
+        }
+        var result = store().dispatch({ type: 'JOIN_GROUP', payload: { code: code } });
+        if (!result || !result.ok) {
+          if (errorEl) errorEl.textContent = (result && result.error) || 'Could not join that group.';
+          return;
+        }
+        closeModal(qs('#joinModal'));
+        showToast('Joined the group');
+      });
+    }
+
+    // ---- copy the invite code ----
+    var copyBtn = qs('#copyInviteBtn');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', function () {
+        var codeEl = qs('#inviteCodeText');
+        var code = codeEl ? codeEl.textContent.trim() : '';
+        if (!code) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(code).then(
+            function () { showToast('Invite code copied'); },
+            function () { showToast('Could not copy — select the code and copy it manually.'); }
+          );
+        } else {
+          showToast('Copy the code manually: ' + code);
+        }
+      });
+    }
+  }
+
+  function openInviteModal(group) {
+    var codeEl = qs('#inviteCodeText');
+    if (codeEl) codeEl.textContent = group.inviteCode || '(no code)';
+    openModal(qs('#inviteModal'));
+  }
+
   function init() {
     wireStaticEvents();
-    SW.Store.init();
-    SW.Store.subscribe(render);
-    render(SW.Store.getState());
+    wireAuthEvents();
+
+    // No Supabase project configured: behave exactly like the old app.
+    if (!backendAvailable()) {
+      startLocalMode();
+      return;
+    }
+
+    // Reflect later sign-ins and sign-outs (including the redirect back
+    // from Google, which lands on this page as a fresh load).
+    SW.Auth.onChange(function () {
+      if (SW.Auth.isSignedIn()) {
+        if (!isRemote()) startRemoteMode();
+      } else if (isRemote()) {
+        activeStore = null;
+        subscribed = false;
+        showAuthScreen();
+      }
+    });
+
+    SW.Auth.init()
+      .then(function () {
+        if (SW.Auth.isSignedIn()) {
+          startRemoteMode();
+        } else {
+          showAuthScreen();
+        }
+      })
+      .catch(function () {
+        // If the backend cannot even be reached, the app is still useful
+        // offline - better that than a blank page.
+        showToast('Could not reach the server — starting in demo mode.');
+        startLocalMode();
+      });
   }
 
   if (document.readyState === 'loading') {
