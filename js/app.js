@@ -1574,13 +1574,39 @@ SW.App = SW.App || {};
           if (errorEl) errorEl.textContent = 'Enter the invite code your friend sent you.';
           return;
         }
-        var result = store().dispatch({ type: 'JOIN_GROUP', payload: { code: code } });
-        if (!result || !result.ok) {
-          if (errorEl) errorEl.textContent = (result && result.error) || 'Could not join that group.';
-          return;
+        // Joining needs a round trip - the code has to be checked against
+        // the server before we know whether it worked. So the modal stays
+        // open, saying what it is doing, until the store reports back.
+        var submitBtn = joinForm.querySelector('button[type="submit"]');
+        var originalLabel = submitBtn ? submitBtn.textContent : '';
+        if (submitBtn) {
+          submitBtn.disabled = true;
+          submitBtn.textContent = 'Joining…';
         }
-        closeModal(qs('#joinModal'));
-        showToast('Joined the group');
+
+        function finished(outcome) {
+          if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = originalLabel;
+          }
+          if (outcome && outcome.ok) {
+            closeModal(qs('#joinModal'));
+            showToast('Joined the group');
+          } else if (errorEl) {
+            errorEl.textContent = (outcome && outcome.error) || 'Could not join that group.';
+          }
+        }
+
+        var result = store().dispatch({
+          type: 'JOIN_GROUP',
+          payload: { code: code, onResult: finished }
+        });
+
+        // A store that rejects the action outright (offline mode, or a
+        // malformed code) answers immediately and never calls back.
+        if (!result || !result.ok) {
+          finished({ ok: false, error: (result && result.error) || 'Could not join that group.' });
+        }
       });
     }
 

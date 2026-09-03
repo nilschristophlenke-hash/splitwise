@@ -572,7 +572,16 @@ SW.RemoteStore = (function () {
 
       notifySyncStatus('saving', 'Joining group…');
 
-      client.rpc('join_group_by_code', { code: code }).then(function (res) {
+      // Joining is the one action that cannot be applied optimistically:
+      // until the server resolves the code we do not know which group it is,
+      // or whether the code is even real. So instead of pretending it
+      // succeeded, we report the outcome through this callback and let the
+      // caller keep its modal open until we actually know.
+      var report = typeof payload.onResult === 'function' ? payload.onResult : function () {};
+
+      // The parameter really is called p_code: PostgREST matches RPC
+      // arguments by name, so `code` silently resolves to no function at all.
+      client.rpc('join_group_by_code', { p_code: code }).then(function (res) {
         if (res.error) throw res.error;
         var groupId = Array.isArray(res.data) ? res.data[0] : res.data;
         if (groupId && typeof groupId === 'object') {
@@ -588,13 +597,17 @@ SW.RemoteStore = (function () {
             if (result.groups.length) state.ui.currentGroupId = groupId;
             notify();
             notifySyncStatus('saved', 'Joined.');
+            report({ ok: true });
           });
         });
       }).catch(function (err) {
-        notifySyncStatus('error', 'Could not join that group: ' + errMsg(err));
+        var message = errMsg(err);
+        notifySyncStatus('error', 'Could not join that group: ' + message);
+        report({ ok: false, error: message });
       });
 
-      return { ok: true };
+      // "The request is on its way", not "you are in the group".
+      return { ok: true, pending: true };
     },
 
     RENAME_GROUP: function (payload, client) {
