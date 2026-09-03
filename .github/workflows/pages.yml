@@ -25,6 +25,18 @@ jobs:
       - name: Run model unit tests
         run: node tests/model.test.js
 
+      # Runs supabase/schema.sql against real Postgres (compiled to WASM, so
+      # no database service is needed) and then attacks the row-level security
+      # policies as three different users. This is what stops a change to the
+      # policies from quietly exposing one group's expenses to another.
+      - name: Install test dependencies
+        run: npm install --no-audit --no-fund
+        working-directory: tests
+
+      - name: Run database security tests
+        run: node rls.test.js
+        working-directory: tests
+
   deploy:
     needs: test
     runs-on: ubuntu-latest

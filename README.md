@@ -23,11 +23,23 @@ python3 -m http.server 8000
 A static server is recommended over opening the file directly so `sessionStorage` and
 `localStorage` behave consistently.
 
-Run the unit tests:
+Run the tests:
 
 ```bash
-node tests/model.test.js
+node tests/model.test.js          # splitting, balances, debt simplification
+
+cd tests && npm install && node rls.test.js
 ```
+
+The second one applies `supabase/schema.sql` to a real Postgres (compiled to
+WebAssembly, so nothing has to be installed or running) and then attacks the
+row-level security policies as three different users: a group owner, a friend
+who joins with the invite code, and a stranger. It asserts the stranger can
+neither read nor write anything, cannot join by guessing a group's UUID, and
+cannot escalate to owner.
+
+Those are dev dependencies only, and they live in `tests/` — the app itself
+still ships with no dependencies and no build step.
 
 ## Admin console
 

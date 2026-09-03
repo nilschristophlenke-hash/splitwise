@@ -229,19 +229,22 @@ create policy "group_members_select" on public.group_members
   for select
   using (public.is_group_member(group_id, auth.uid()));
 
--- KNOWN TRADEOFF, deliberate: this policy lets any signed-in user insert
--- themselves into a group if they know that group's UUID, without presenting
--- the invite code. It is kept because join_group_by_code() relies on being
--- able to write this row, and a policy that fails closed would break joining
--- outright. The exposure is small - group UUIDs never appear in a URL or in
--- any page the client renders, so there is no ordinary way for one to leak -
--- but it is a real gap rather than a theoretical one, and it is written down
--- here rather than left silent. Tightening it means routing joins through the
--- RPC only, which is worth doing if group ids ever become visible anywhere.
+-- There is deliberately NO insert policy on this table.
+--
+-- With RLS enabled and no policy for a command, that command is denied - so
+-- nobody can write a membership row directly. The only way in is
+-- join_group_by_code(), which is `security definer`: it runs as the table's
+-- owner and therefore bypasses RLS, but only ever inserts auth.uid(), and
+-- only after matching the invite code.
+--
+-- An earlier version allowed a self-insert (`user_id = auth.uid()`), which
+-- looked harmless because you could still only add yourself. It was not: it
+-- let anyone holding a group's UUID add themselves and read every expense in
+-- it, with no invite code needed. Verified against real Postgres - the
+-- insert succeeded and the group became visible. It is easy to miss when
+-- testing with `returning`, because `returning` additionally needs SELECT
+-- rights and fails first, making the attack look blocked when it is not.
 drop policy if exists "group_members_insert" on public.group_members;
-create policy "group_members_insert" on public.group_members
-  for insert
-  with check (user_id = auth.uid() and role = 'member');
 
 drop policy if exists "group_members_delete" on public.group_members;
 create policy "group_members_delete" on public.group_members

@@ -1,0 +1,11 @@
+{
+  "name": "splitwise-tests",
+  "private": true,
+  "description": "Dev-only test dependencies. The app itself ships with zero runtime dependencies; this package.json exists so the database security tests can run real Postgres in WebAssembly. It lives in tests/ rather than the repo root so it cannot turn the static site into a build-step deployment.",
+  "scripts": {
+    "test": "node model.test.js && node rls.test.js"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8"
+  }
+}
