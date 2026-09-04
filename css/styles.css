@@ -1074,3 +1074,91 @@ select#groupCurrencySelect {
     font-size: 20px;
   }
 }
+
+/* ==========================================================================
+   Persistent failure banner
+   Sits above everything and stays until dismissed or until a later write
+   succeeds. Losing a failed-save message after five seconds is how people
+   end up believing money was recorded when it was not.
+   ========================================================================== */
+.error-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.error-banner .icon-btn {
+  color: #fff;
+  flex: 0 0 auto;
+}
+
+/* An author `display` rule beats the browser's built-in [hidden] rule, so
+   every element styled above and toggled with el.hidden needs this. */
+.error-banner[hidden] {
+  display: none !important;
+}
+
+/* ---- destructive action ---- */
+.btn-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.btn-danger:hover {
+  filter: brightness(0.94);
+}
+
+.confirm-body {
+  margin: 0 0 16px;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.confirm-body strong {
+  font-weight: 600;
+}
+
+/* ---- demo-mode data-loss warning on the sign-in card ---- */
+.auth-warning {
+  display: block;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.auth-warning[hidden] {
+  display: none !important;
+}
+
+/* ---- small muted hint under a form ---- */
+.form-hint {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.form-hint[hidden] {
+  display: none !important;
+}
+
+/* Background content is inert while a modal is open; belt-and-braces for
+   browsers without `inert` support. */
+[inert],
+[aria-hidden="true"][data-modal-blocked] {
+  pointer-events: none;
+  user-select: none;
+}

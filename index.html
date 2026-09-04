@@ -7,6 +7,14 @@
   <link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>
+  <!-- Stays put until dismissed or until a later write succeeds. A toast
+       that vanishes after five seconds is the wrong way to tell somebody
+       their money did not save. -->
+  <div id="errorBanner" class="error-banner" role="alert" hidden>
+    <span id="errorBannerText"></span>
+    <button type="button" class="icon-btn" id="errorBannerDismiss" aria-label="Dismiss">✕</button>
+  </div>
+
   <div class="app-shell">
     <!-- ============================== Header ============================== -->
     <header class="app-header">
@@ -110,8 +118,58 @@
         <button type="button" class="link-btn" id="authSwitchBtn">Create one</button>
       </p>
 
+      <p class="auth-warning" id="demoDataWarning" hidden></p>
+
       <button type="button" class="link-btn auth-demo-btn" id="tryDemoBtn">Try the demo without an account</button>
       <p class="auth-hint">Demo data stays only in this browser — it is not shared with anyone.</p>
+    </div>
+  </div>
+
+  <!-- ===================== Reusable text-input dialog ===================== -->
+  <div class="modal-overlay" id="promptModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="promptTitle">
+      <div class="modal-header">
+        <h2 id="promptTitle">Rename</h2>
+        <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog">✕</button>
+      </div>
+      <form id="promptForm">
+        <div class="form-row">
+          <label for="promptInput" id="promptLabel">Value</label>
+          <input type="text" id="promptInput" maxlength="80" />
+          <p class="hint" id="promptHint"></p>
+        </div>
+        <p class="form-error" id="promptError" role="alert"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary" id="promptSubmitBtn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ====================== Reusable confirm dialog ====================== -->
+  <div class="modal-overlay" id="confirmModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+      <div class="modal-header">
+        <h2 id="confirmTitle">Are you sure?</h2>
+        <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog">✕</button>
+      </div>
+      <form id="confirmForm">
+        <p id="confirmBody" class="confirm-body"></p>
+        <!-- Only shown for the truly destructive ones: you have to type the
+             name back before the button will do anything. -->
+        <div class="form-row" id="confirmTypeRow" hidden>
+          <label for="confirmTypeInput" id="confirmTypeLabel">Type the name to confirm</label>
+          <input type="text" id="confirmTypeInput" autocomplete="off" />
+        </div>
+        <p class="form-error" id="confirmError" role="alert"></p>
+        <div class="modal-actions">
+          <!-- Cancel comes first and takes focus, so the dangerous button is
+               never one stray Enter away. -->
+          <button type="button" class="btn" data-close-modal id="confirmCancelBtn">Cancel</button>
+          <button type="submit" class="btn btn-danger" id="confirmOkBtn">Delete</button>
+        </div>
+      </form>
     </div>
   </div>
 
@@ -274,7 +332,8 @@
       <div class="invite-code-block" id="inviteCodeText"></div>
       <div class="modal-actions">
         <button type="button" class="btn" data-close-modal>Close</button>
-        <button type="button" class="btn btn-primary" id="copyInviteBtn">Copy code</button>
+        <button type="button" class="btn btn-primary" id="copyInviteLinkBtn">Copy invite link</button>
+        <button type="button" class="btn" id="copyInviteBtn">Copy code only</button>
       </div>
     </div>
   </div>
@@ -307,6 +366,7 @@
   <script src="vendor/supabase.js"></script>
   <script src="js/config.js"></script>
   <script src="js/auth.js"></script>
+  <script src="js/router.js"></script>
   <script src="js/model.js"></script>
   <script src="js/store.js"></script>
   <script src="js/remote-store.js"></script>

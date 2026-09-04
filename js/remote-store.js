@@ -162,6 +162,10 @@ SW.RemoteStore = (function () {
       category: expenseRow.category,
       date: expenseRow.date,
       createdAt: expenseRow.created_at ? new Date(expenseRow.created_at).getTime() : Date.now(),
+      // Kept verbatim (not parsed): it is sent straight back to the server
+      // as the version we saw, so that an edit based on stale data is
+      // refused instead of quietly overwriting somebody else's change.
+      updatedAt: expenseRow.updated_at || null,
       note: expenseRow.note || '',
     };
   }
@@ -393,29 +397,37 @@ SW.RemoteStore = (function () {
       created_by: user.id,
     };
 
-    client.from('expenses').insert(row).select().single().then(function (res) {
+    // One call, not two. create_expense() validates the split, checks that
+    // everyone involved is actually in the group, and writes both tables in
+    // a single transaction. The old two-step insert could leave a half-written
+    // expense behind, and validated nothing: the server happily accepted a
+    // 100.00 expense split into 10.00 + 20.00.
+    client.rpc('create_expense', {
+      p_group_id: row.group_id,
+      p_type: row.type,
+      p_description: row.description,
+      p_amount_cents: row.amount_cents,
+      p_paid_by: row.paid_by,
+      p_split_mode: row.split_mode,
+      p_category: row.category,
+      p_date: row.date,
+      p_note: row.note,
+      p_participants: expense.participants.map(function (p) {
+        return { user_id: p.memberId, value: p.value };
+      }),
+    }).then(function (res) {
       if (res.error) throw res.error;
-      var savedRow = res.data;
-      var participantRows = expense.participants.map(function (p) {
-        return { expense_id: savedRow.id, user_id: p.memberId, value: p.value };
-      });
+      var savedRow = Array.isArray(res.data) ? res.data[0] : res.data;
+      if (!savedRow || !savedRow.id) throw new Error('The server did not return the saved expense.');
 
-      return client.from('expense_participants').insert(participantRows).then(function (partRes) {
-        if (partRes.error) {
-          // Half-written expense: the row exists but its split doesn't.
-          // Delete it again rather than leave it visible with no split.
-          return client.from('expenses').delete().eq('id', savedRow.id).then(function () {
-            throw partRes.error;
-          });
-        }
-        var cached = state.expenses.find(function (e) { return e.id === tempId; });
-        if (cached) {
-          cached.id = savedRow.id;
-          cached.createdAt = savedRow.created_at ? new Date(savedRow.created_at).getTime() : cached.createdAt;
-        }
-        notify();
-        notifySyncStatus('saved', 'Saved.');
-      });
+      var cached = state.expenses.find(function (e) { return e.id === tempId; });
+      if (cached) {
+        cached.id = savedRow.id;
+        cached.createdAt = savedRow.created_at ? new Date(savedRow.created_at).getTime() : cached.createdAt;
+        cached.updatedAt = savedRow.updated_at || null;
+      }
+      notify();
+      notifySyncStatus('saved', 'Saved.');
     }).catch(function (err) {
       state.expenses = state.expenses.filter(function (e) { return e.id !== tempId; });
       if (activityEntryId) {
@@ -443,17 +455,10 @@ SW.RemoteStore = (function () {
     };
 
     function rollback(err) {
-      var fallbackRow = {
-        description: before.description,
-        amount_cents: before.amountCents,
-        paid_by: before.paidBy,
-        split_mode: before.splitMode,
-        category: before.category,
-        date: before.date,
-        note: before.note,
-      };
-      client.from('expenses').update(fallbackRow).eq('id', before.id).then(function () {}, function () {});
-
+      // No compensating write here any more. update_expense() is a single
+      // transaction: if it failed, nothing was written, so there is nothing
+      // on the server to undo - only the optimistic local copy to revert.
+      // (Writing to the expenses table directly is not permitted now either.)
       var found = findExpenseAndGroup(before.id);
       if (found) {
         var e = found.expense;
@@ -473,32 +478,32 @@ SW.RemoteStore = (function () {
       notifySyncStatus('error', 'Could not save changes: ' + errMsg(err));
     }
 
-    client.from('expenses').update(fieldsRow).eq('id', expense.id).select().then(function (res) {
+    // Same story as the create path: one validated call instead of three
+    // unvalidated ones. p_expected_updated_at is optimistic concurrency - if
+    // somebody else changed this expense since we loaded it, the server
+    // refuses rather than silently overwriting their edit.
+    client.rpc('update_expense', {
+      p_expense_id: expense.id,
+      p_description: fieldsRow.description,
+      p_amount_cents: fieldsRow.amount_cents,
+      p_paid_by: fieldsRow.paid_by,
+      p_split_mode: fieldsRow.split_mode,
+      p_category: fieldsRow.category,
+      p_date: fieldsRow.date,
+      p_note: fieldsRow.note,
+      p_participants: expense.participants.map(function (p) {
+        return { user_id: p.memberId, value: p.value };
+      }),
+      p_expected_updated_at: before.updatedAt || null,
+    }).then(function (res) {
       if (res.error) throw res.error;
-      if (!res.data || res.data.length === 0) {
+      var savedRow = Array.isArray(res.data) ? res.data[0] : res.data;
+      if (!savedRow || !savedRow.id) {
         throw new Error('You do not have permission to edit this expense.');
       }
-      if (!participantsChanged) {
-        notifySyncStatus('saved', 'Saved.');
-        return null;
-      }
-      return client.from('expense_participants').delete().eq('expense_id', expense.id).then(function (delRes) {
-        if (delRes.error) throw delRes.error;
-        var newRows = expense.participants.map(function (p) {
-          return { expense_id: expense.id, user_id: p.memberId, value: p.value };
-        });
-        return client.from('expense_participants').insert(newRows).then(function (insRes) {
-          if (insRes.error) {
-            var oldRows = before.participants.map(function (p) {
-              return { expense_id: expense.id, user_id: p.memberId, value: p.value };
-            });
-            return client.from('expense_participants').insert(oldRows).then(function () {
-              throw insRes.error;
-            });
-          }
-          notifySyncStatus('saved', 'Saved.');
-        });
-      });
+      var cached = state.expenses.find(function (e) { return e.id === expense.id; });
+      if (cached) cached.updatedAt = savedRow.updated_at || null;
+      notifySyncStatus('saved', 'Saved.');
     }).catch(rollback);
   }
 
@@ -653,11 +658,11 @@ SW.RemoteStore = (function () {
       addActivity('group', 'Deleted group "' + group.name + '".');
       notifySyncStatus('saving', 'Deleting…');
 
-      client.from('groups').delete().eq('id', group.id).select().then(function (res) {
+      // delete_group() clears expenses, participants and memberships in one
+      // transaction. A plain delete would now trip the guard that stops a
+      // member walking away from a debt, so this has to be the RPC.
+      client.rpc('delete_group', { p_group_id: group.id }).then(function (res) {
         if (res.error) throw res.error;
-        if (!res.data || res.data.length === 0) {
-          throw new Error('Only the group owner can delete this group.');
-        }
         notifySyncStatus('saved', 'Saved.');
       }).catch(function (err) {
         state.groups.push(groupSnapshot);
@@ -668,6 +673,57 @@ SW.RemoteStore = (function () {
       });
 
       return { ok: true };
+    },
+
+    // Lets an owner revoke a code that has been shared too widely. Without
+    // this, a screenshot in a group chat is permanent access.
+    ROTATE_INVITE_CODE: function (payload, client) {
+      var group = findGroup(payload.groupId);
+      if (!group) return { ok: false, error: 'Group not found.' };
+      var report = typeof payload.onResult === 'function' ? payload.onResult : function () {};
+
+      notifySyncStatus('saving', 'Generating a new code…');
+      client.rpc('rotate_invite_code', { p_group_id: group.id }).then(function (res) {
+        if (res.error) throw res.error;
+        var code = Array.isArray(res.data) ? res.data[0] : res.data;
+        if (typeof code === 'object' && code) code = code.rotate_invite_code || code.code;
+        if (!code) throw new Error('The server did not return a new code.');
+        var g = findGroup(payload.groupId);
+        if (g) g.inviteCode = code;
+        notify();
+        notifySyncStatus('saved', 'New code ready.');
+        report({ ok: true, code: code });
+      }).catch(function (err) {
+        var message = errMsg(err);
+        notifySyncStatus('error', 'Could not change the code: ' + message);
+        report({ ok: false, error: message });
+      });
+
+      return { ok: true, pending: true };
+    },
+
+    TRANSFER_OWNERSHIP: function (payload, client) {
+      var group = findGroup(payload.groupId);
+      if (!group) return { ok: false, error: 'Group not found.' };
+      var report = typeof payload.onResult === 'function' ? payload.onResult : function () {};
+
+      notifySyncStatus('saving', 'Handing over…');
+      client.rpc('transfer_ownership', {
+        p_group_id: group.id, p_new_owner: payload.newOwnerId
+      }).then(function (res) {
+        if (res.error) throw res.error;
+        var g = findGroup(payload.groupId);
+        if (g) g.ownerId = payload.newOwnerId;
+        notify();
+        notifySyncStatus('saved', 'Saved.');
+        report({ ok: true });
+      }).catch(function (err) {
+        var message = errMsg(err);
+        notifySyncStatus('error', 'Could not hand over the group: ' + message);
+        report({ ok: false, error: message });
+      });
+
+      return { ok: true, pending: true };
     },
 
     SELECT_GROUP: function (payload) {

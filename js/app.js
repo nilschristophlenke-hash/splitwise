@@ -124,6 +124,11 @@ SW.App = SW.App || {};
     return !!(window.SW && SW.Config && SW.Config.isConfigured() && SW.Auth && SW.Auth.client());
   }
 
+  // What the URL asked for, applied once the store has actually loaded -
+  // a bookmarked group link arrives long before the groups do.
+  var pendingGroupFromUrl = null;
+  var pendingJoinCode = null;
+
   var lastState = null;              // most recent state passed to render()
   var currentGroupForModal = null;   // group the expense modal is currently editing for
   var currentGroupForSettle = null;  // group the settle-up modal is currently open for
@@ -191,10 +196,27 @@ SW.App = SW.App || {};
     }
   }
 
+  // Tab is already trapped, but a screen reader's browse mode can still walk
+  // through the page behind a dialog. `inert` stops that properly.
+  function setBackgroundInert(on) {
+    var shell = qs('.app-shell');
+    if (!shell) return;
+    if (on) {
+      shell.setAttribute('inert', '');
+      shell.setAttribute('aria-hidden', 'true');
+      shell.setAttribute('data-modal-blocked', '');
+    } else {
+      shell.removeAttribute('inert');
+      shell.removeAttribute('aria-hidden');
+      shell.removeAttribute('data-modal-blocked');
+    }
+  }
+
   function openModal(overlay) {
     ui.lastFocusedEl = document.activeElement;
     overlay.hidden = false;
     openModalStack.push(overlay);
+    setBackgroundInert(true);
     document.addEventListener('keydown', trapKeydown);
   }
 
@@ -204,6 +226,7 @@ SW.App = SW.App || {};
       return o !== overlay;
     });
     if (openModalStack.length === 0) {
+      setBackgroundInert(false);
       document.removeEventListener('keydown', trapKeydown);
     }
     if (ui.lastFocusedEl && typeof ui.lastFocusedEl.focus === 'function') {
@@ -321,6 +344,7 @@ SW.App = SW.App || {};
     qsa('.group-btn', listEl).forEach(function (btn) {
       btn.addEventListener('click', function () {
         store().dispatch({ type: 'SELECT_GROUP', payload: { groupId: btn.getAttribute('data-id') } });
+        if (SW.Router) SW.Router.goToGroup(btn.getAttribute('data-id'));
       });
     });
   }
@@ -658,21 +682,42 @@ SW.App = SW.App || {};
     var renameBtn = qs('#renameGroupBtn');
     if (renameBtn) {
       renameBtn.addEventListener('click', function () {
-        var name = window.prompt('Rename group', group.name);
-        if (name === null) return;
-        var trimmed = name.trim();
-        if (!trimmed) return;
-        var result = store().dispatch({ type: 'RENAME_GROUP', payload: { groupId: group.id, name: trimmed } });
-        showToast(result && result.ok ? 'Group renamed' : (result && result.error) || 'Could not rename group.');
+        openPrompt({
+          title: 'Rename group', label: 'Group name', submitLabel: 'Rename',
+          value: group.name
+        }, function (name) {
+          var result = store().dispatch({ type: 'RENAME_GROUP', payload: { groupId: group.id, name: name } });
+          showToast(result && result.ok ? 'Group renamed' : (result && result.error) || 'Could not rename group.');
+        });
       });
     }
 
     var deleteBtn = qs('#deleteGroupBtn');
     if (deleteBtn) {
       deleteBtn.addEventListener('click', function () {
-        if (!window.confirm('Delete "' + group.name + '" and all its expenses? This cannot be undone.')) return;
-        var result = store().dispatch({ type: 'DELETE_GROUP', payload: { groupId: group.id } });
-        showToast(result && result.ok ? 'Group deleted' : (result && result.error) || 'Could not delete group.');
+        var count = (lastState ? lastState.expenses : []).filter(function (e) {
+          return e.groupId === group.id;
+        }).length;
+        var shared = group.members.length > 1;
+        openConfirm({
+          title: 'Delete this group?',
+          confirmLabel: 'Delete group',
+          // Spelling out the blast radius, because this destroys other
+          // people's records too, not just yours.
+          bodyHtml:
+            '<strong>' + esc(group.name) + '</strong> and its ' + count +
+            ' expense' + (count === 1 ? '' : 's') + ' will be permanently deleted.' +
+            (shared
+              ? ' This removes them for all ' + group.members.length +
+                ' members, not just you.'
+              : '') +
+            ' This cannot be undone.',
+          requireText: group.name
+        }, function () {
+          var result = store().dispatch({ type: 'DELETE_GROUP', payload: { groupId: group.id } });
+          showToast(result && result.ok ? 'Group deleted' : (result && result.error) || 'Could not delete group.');
+          if (result && result.ok && SW.Router) SW.Router.replaceRoot();
+        });
       });
     }
 
@@ -688,12 +733,14 @@ SW.App = SW.App || {};
     var addMemberBtn = qs('#addMemberBtn');
     if (addMemberBtn) {
       addMemberBtn.addEventListener('click', function () {
-        var name = window.prompt('New member name');
-        if (name === null) return;
-        var trimmed = name.trim();
-        if (!trimmed) return;
-        var result = store().dispatch({ type: 'ADD_MEMBER', payload: { groupId: group.id, name: trimmed } });
-        showToast(result && result.ok ? 'Member added' : (result && result.error) || 'Could not add member.');
+        openPrompt({
+          title: 'Add a member', label: 'Name', submitLabel: 'Add',
+          placeholder: 'e.g. Mara',
+          hint: 'Demo mode only — with an account, people join with an invite code.'
+        }, function (name) {
+          var result = store().dispatch({ type: 'ADD_MEMBER', payload: { groupId: group.id, name: name } });
+          showToast(result && result.ok ? 'Member added' : (result && result.error) || 'Could not add member.');
+        });
       });
     }
 
@@ -1183,7 +1230,9 @@ SW.App = SW.App || {};
       var payload = isRemote()
         ? { name: name, currency: currency }
         : { name: name, currency: currency, memberNames: memberNames };
+      var release = guardSubmit(qs('#groupForm'), 'Creating…');
       var result = store().dispatch({ type: 'ADD_GROUP', payload: payload });
+      if (release) release();
       if (!result || !result.ok) {
         errorEl.textContent = (result && result.error) || 'Could not create group.';
         return;
@@ -1268,10 +1317,16 @@ SW.App = SW.App || {};
         closeDataMenu();
         return;
       }
-      if (!window.confirm('Reset all data? This deletes every group and expense and cannot be undone.')) return;
-      store().reset();
       closeDataMenu();
-      showToast('All data reset');
+      openConfirm({
+        title: 'Reset all data?',
+        confirmLabel: 'Reset everything',
+        body: 'This deletes every group and expense stored in this browser. It cannot be undone.',
+        requireText: 'RESET'
+      }, function () {
+        store().reset();
+        showToast('All data reset');
+      });
     });
 
     qs('#demoBtn').addEventListener('click', function () {
@@ -1354,6 +1409,116 @@ SW.App = SW.App || {};
     }
   }
 
+  // Stops a double-click on a slow connection posting the same expense twice.
+  function guardSubmit(form, pendingLabel) {
+    var btn = form.querySelector('button[type="submit"]');
+    if (!btn || btn.disabled) return null;
+    var original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = pendingLabel || 'Saving…';
+    return function release() {
+      btn.disabled = false;
+      btn.textContent = original;
+    };
+  }
+
+  // ---- in-app replacements for window.prompt / window.confirm -------------
+  // The native ones cannot be styled, cannot be branded, and are genuinely
+  // unpleasant on a phone. These reuse the existing modal plumbing, so they
+  // get the focus trap and Escape handling for free.
+  function openPrompt(opts, onSubmit) {
+    var overlay = qs('#promptModal');
+    qs('#promptTitle').textContent = opts.title || 'Edit';
+    qs('#promptLabel').textContent = opts.label || 'Value';
+    qs('#promptSubmitBtn').textContent = opts.submitLabel || 'Save';
+    qs('#promptHint').textContent = opts.hint || '';
+    qs('#promptHint').hidden = !opts.hint;
+    qs('#promptError').textContent = '';
+    var input = qs('#promptInput');
+    input.value = opts.value || '';
+    input.placeholder = opts.placeholder || '';
+    promptHandler = onSubmit;
+    openModal(overlay);
+    input.focus();
+    input.select();
+  }
+
+  var promptHandler = null;
+
+  // `requireText` turns this into a type-the-name-to-confirm dialog, for the
+  // things that destroy other people's data as well as your own.
+  function openConfirm(opts, onConfirm) {
+    var overlay = qs('#confirmModal');
+    qs('#confirmTitle').textContent = opts.title || 'Are you sure?';
+    qs('#confirmBody').innerHTML = opts.bodyHtml || esc(opts.body || '');
+    qs('#confirmOkBtn').textContent = opts.confirmLabel || 'Delete';
+    qs('#confirmError').textContent = '';
+    var row = qs('#confirmTypeRow');
+    var input = qs('#confirmTypeInput');
+    input.value = '';
+    row.hidden = !opts.requireText;
+    if (opts.requireText) {
+      qs('#confirmTypeLabel').textContent = 'Type "' + opts.requireText + '" to confirm';
+    }
+    confirmHandler = onConfirm;
+    confirmRequiredText = opts.requireText || null;
+    openModal(overlay);
+    // Focus lands on Cancel, never on the destructive button.
+    var cancel = qs('#confirmCancelBtn');
+    if (cancel) cancel.focus();
+  }
+
+  var confirmHandler = null;
+  var confirmRequiredText = null;
+
+  function wireDialogs() {
+    qs('#promptForm').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var value = qs('#promptInput').value.trim();
+      if (!value) {
+        qs('#promptError').textContent = 'Please enter a value.';
+        return;
+      }
+      var fn = promptHandler;
+      closeModal(qs('#promptModal'));
+      if (fn) fn(value);
+    });
+
+    qs('#confirmForm').addEventListener('submit', function (e) {
+      e.preventDefault();
+      if (confirmRequiredText) {
+        var typed = qs('#confirmTypeInput').value.trim();
+        if (typed !== confirmRequiredText) {
+          qs('#confirmError').textContent = 'That does not match. Type it exactly to confirm.';
+          return;
+        }
+      }
+      var fn = confirmHandler;
+      closeModal(qs('#confirmModal'));
+      if (fn) fn();
+    });
+
+    var dismiss = qs('#errorBannerDismiss');
+    if (dismiss) dismiss.addEventListener('click', clearErrorBanner);
+  }
+
+  // ---- persistent failure banner -----------------------------------------
+  // A toast that disappears after five seconds is the wrong way to tell
+  // somebody their money did not save. This stays until they dismiss it or
+  // a later write succeeds.
+  function showErrorBanner(message) {
+    var banner = qs('#errorBanner');
+    var text = qs('#errorBannerText');
+    if (!banner || !text) return;
+    text.textContent = message;
+    banner.hidden = false;
+  }
+
+  function clearErrorBanner() {
+    var banner = qs('#errorBanner');
+    if (banner) banner.hidden = true;
+  }
+
   // ---- "Saving… / Saved / Offline" indicator ------------------------------
   var syncStatusTimer = null;
 
@@ -1374,11 +1539,14 @@ SW.App = SW.App || {};
       el.textContent = 'Saving…';
     } else if (status.state === 'saved') {
       el.textContent = 'Saved';
+      // A success means whatever failed before is no longer the current
+      // state of the world, so the banner can go.
+      clearErrorBanner();
       // "Saved" is reassurance, not information - let it fade out.
       syncStatusTimer = setTimeout(function () { el.hidden = true; }, 1500);
     } else {
-      el.textContent = status.message || 'Not saved — check your connection';
-      showToast(status.message || 'Could not save your change.');
+      el.textContent = 'Not saved';
+      showErrorBanner(status.message || 'A change could not be saved. It is not stored.');
     }
   }
 
@@ -1387,6 +1555,33 @@ SW.App = SW.App || {};
     var screen = qs('#authScreen');
     if (screen) screen.hidden = false;
     renderAccount(null);
+    warnAboutStrandedDemoData();
+  }
+
+  // Demo mode writes to localStorage. Signing up does NOT bring that data
+  // with you - it just stops being visible, which is a horrible surprise if
+  // you spent an evening entering real expenses. Say so before it happens,
+  // but only when there is actually something to lose.
+  function warnAboutStrandedDemoData() {
+    var warn = qs('#demoDataWarning');
+    if (!warn) return;
+    var local = null;
+    try {
+      local = SW.Store.getState();
+    } catch (err) {
+      local = null;
+    }
+    if (!local || !local.groups || local.groups.length === 0) {
+      warn.hidden = true;
+      return;
+    }
+    var expenseCount = local.expenses ? local.expenses.length : 0;
+    warn.textContent =
+      'You have ' + local.groups.length + ' group' + (local.groups.length === 1 ? '' : 's') +
+      ' and ' + expenseCount + ' expense' + (expenseCount === 1 ? '' : 's') +
+      ' saved in this browser from demo mode. Creating an account starts a fresh, shared set of books — ' +
+      'this demo data stays here and will not move across.';
+    warn.hidden = false;
   }
 
   function hideAuthScreen() {
@@ -1433,6 +1628,7 @@ SW.App = SW.App || {};
       .then(function () {
         setSyncStatus({ state: 'saved' });
         render(SW.RemoteStore.getState());
+        applyPendingUrlIntent();
       })
       .catch(function (err) {
         setSyncStatus({
@@ -1440,6 +1636,30 @@ SW.App = SW.App || {};
           message: 'Could not load your groups: ' + ((err && err.message) || 'unknown error')
         });
       });
+  }
+
+  // Runs once the groups are actually in memory, so a link to a group works
+  // on a cold load and an invite link opens the join dialog ready to go.
+  function applyPendingUrlIntent() {
+    if (pendingJoinCode) {
+      var input = qs('#joinCodeInput');
+      if (input) input.value = pendingJoinCode;
+      var err = qs('#joinError');
+      if (err) err.textContent = '';
+      openModal(qs('#joinModal'));
+      pendingJoinCode = null;
+      return;
+    }
+    if (pendingGroupFromUrl) {
+      var res = store().dispatch({ type: 'SELECT_GROUP', payload: { groupId: pendingGroupFromUrl } });
+      if (!res || !res.ok) {
+        // The link points at a group this account cannot see. Say so rather
+        // than silently showing them somebody else's group.
+        showToast('That group link is not available on this account.');
+        if (SW.Router) SW.Router.replaceRoot();
+      }
+      pendingGroupFromUrl = null;
+    }
   }
 
   function wireAuthEvents() {
@@ -1592,6 +1812,8 @@ SW.App = SW.App || {};
           if (outcome && outcome.ok) {
             closeModal(qs('#joinModal'));
             showToast('Joined the group');
+            // Consume the invite link so refreshing does not reopen the dialog.
+            if (SW.Router) SW.Router.replaceRoot();
           } else if (errorEl) {
             errorEl.textContent = (outcome && outcome.error) || 'Could not join that group.';
           }
@@ -1615,29 +1837,65 @@ SW.App = SW.App || {};
     if (copyBtn) {
       copyBtn.addEventListener('click', function () {
         var codeEl = qs('#inviteCodeText');
-        var code = codeEl ? codeEl.textContent.trim() : '';
-        if (!code) return;
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(code).then(
-            function () { showToast('Invite code copied'); },
-            function () { showToast('Could not copy — select the code and copy it manually.'); }
-          );
-        } else {
-          showToast('Copy the code manually: ' + code);
-        }
+        copyText(codeEl ? codeEl.textContent.trim() : '', 'Invite code copied');
+      });
+    }
+
+    var copyLinkBtn = qs('#copyInviteLinkBtn');
+    if (copyLinkBtn) {
+      copyLinkBtn.addEventListener('click', function () {
+        copyText(inviteLinkForCurrentGroup, 'Invite link copied — send it to your friend');
       });
     }
   }
 
+  var inviteLinkForCurrentGroup = '';
+
   function openInviteModal(group) {
     var codeEl = qs('#inviteCodeText');
     if (codeEl) codeEl.textContent = group.inviteCode || '(no code)';
+    // A link is one tap for the person receiving it; a bare code is a
+    // copy-paste and an explanation.
+    inviteLinkForCurrentGroup = (SW.Router && group.inviteCode)
+      ? SW.Router.inviteUrl(group.inviteCode)
+      : '';
+    var linkBtn = qs('#copyInviteLinkBtn');
+    if (linkBtn) linkBtn.hidden = !inviteLinkForCurrentGroup;
     openModal(qs('#inviteModal'));
+  }
+
+  function copyText(text, okMessage) {
+    if (!text) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        function () { showToast(okMessage); },
+        function () { showToast('Could not copy — select it and copy manually.'); }
+      );
+    } else {
+      showToast('Copy manually: ' + text);
+    }
   }
 
   function init() {
     wireStaticEvents();
     wireAuthEvents();
+    wireDialogs();
+
+    // Deep links: ?g=<id> opens a group, ?join=<code> lands a friend on the
+    // join step with the code already filled in. Before this there was no way
+    // to link to anything at all.
+    if (window.SW && SW.Router) {
+      SW.Router.init({
+        onGroup: function (groupId) {
+          pendingGroupFromUrl = groupId;
+          store().dispatch({ type: 'SELECT_GROUP', payload: { groupId: groupId } });
+        },
+        onJoin: function (code) {
+          pendingJoinCode = code;
+        },
+        onRoot: function () {}
+      });
+    }
 
     // No Supabase project configured: behave exactly like the old app.
     if (!backendAvailable()) {

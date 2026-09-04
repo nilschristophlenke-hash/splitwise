@@ -23,6 +23,7 @@ SW.Auth = (function () {
   var currentUser = null; // { id, email, name, avatarUrl } | null
   var listeners = []; // onChange callbacks
   var initPromise = null;
+  var passwordRecoveryDetected = false; // see isPasswordRecovery() below
 
   // -----------------------------------------------------------------
   // small helpers
@@ -91,6 +92,32 @@ SW.Auth = (function () {
     }
   }
 
+  // Read-only check for a "?...type=recovery..." marker in the current
+  // URL (query string or hash). This is how Supabase's *implicit* flow
+  // signals a password-recovery return; the *PKCE* flow (the default for
+  // new projects) doesn't put this in the URL at all and only signals via
+  // the PASSWORD_RECOVERY auth event handled in init() below - that's why
+  // isPasswordRecovery() has to combine both signals.
+  //
+  // This runs once, synchronously, at script load time - i.e. before
+  // cleanAuthParamsFromUrl() ever gets a chance to strip these params out
+  // of the address bar (that only happens later, inside init()'s async
+  // settle() callback). That ordering is what makes the recovery flag
+  // survive the URL cleanup.
+  function urlIndicatesPasswordRecovery() {
+    try {
+      var url = new URL(window.location.href);
+      if (url.searchParams.get('type') === 'recovery') return true;
+      if (url.hash && url.hash.indexOf('type=recovery') !== -1) return true;
+      return false;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  // Captured once, up front - see the comment on urlIndicatesPasswordRecovery.
+  passwordRecoveryDetected = urlIndicatesPasswordRecovery();
+
   // -----------------------------------------------------------------
   // public API
   // -----------------------------------------------------------------
@@ -130,6 +157,12 @@ SW.Auth = (function () {
 
       try {
         sb.auth.onAuthStateChange(function (_event, session) {
+          // Supabase fires this event once it has processed a
+          // password-recovery link from the URL (this is the *only*
+          // signal for the PKCE flow - see urlIndicatesPasswordRecovery).
+          if (_event === 'PASSWORD_RECOVERY') {
+            passwordRecoveryDetected = true;
+          }
           currentUser = mapUser(session && session.user);
           notify();
         });
@@ -239,6 +272,90 @@ SW.Auth = (function () {
     }
   }
 
+  // Sends a "reset your password" email via Supabase Auth. redirectTo
+  // points back at this same page (origin + pathname, no query/hash) so
+  // that whatever the person is doing there when they click the link is
+  // this app, not some other page.
+  //
+  // DELIVERY IS UNRELIABLE: unless this Supabase project has its own SMTP
+  // provider configured (see SETUP.md), reset emails go out through
+  // Supabase's shared built-in mailer. That mailer is rate-limited, not
+  // meant for production traffic, and can be slow, land in spam, or
+  // occasionally not arrive at all. That's a real limitation of the
+  // default setup, not a bug here - tell the person to check spam and be
+  // patient rather than assuming the app is broken.
+  //
+  // Resolves to {ok:true} or {ok:false, error} and never rejects, same
+  // convention as signInWithPassword/signUp.
+  function requestPasswordReset(email) {
+    var sb = client();
+    if (!sb) {
+      return Promise.resolve({ ok: false, error: 'Supabase is not configured yet.' });
+    }
+    try {
+      var redirectTo = window.location.origin + window.location.pathname;
+      return sb.auth
+        .resetPasswordForEmail(String(email || '').trim(), { redirectTo: redirectTo })
+        .then(function (result) {
+          if (result && result.error) {
+            return { ok: false, error: friendlyAuthError(result.error) };
+          }
+          return { ok: true };
+        })
+        .catch(function (err) {
+          return { ok: false, error: (err && err.message) || String(err) };
+        });
+    } catch (err) {
+      return Promise.resolve({ ok: false, error: (err && err.message) || String(err) });
+    }
+  }
+
+  // Sets a new password for whoever the recovery link just signed in
+  // (clicking a valid reset-password link puts Supabase into a temporary
+  // "recovery" session automatically - see isPasswordRecovery()). Call
+  // this from the "choose a new password" form shown during that return
+  // visit, not from anywhere else.
+  //
+  // Resolves to {ok:true} or {ok:false, error} and never rejects.
+  function completePasswordReset(newPassword) {
+    var sb = client();
+    if (!sb) {
+      return Promise.resolve({ ok: false, error: 'Supabase is not configured yet.' });
+    }
+    try {
+      return sb.auth
+        .updateUser({ password: String(newPassword || '') })
+        .then(function (result) {
+          if (result && result.error) {
+            return { ok: false, error: friendlyAuthError(result.error) };
+          }
+          // The recovery flow is done - a fresh visit shouldn't still be
+          // treated as "returning from a reset email".
+          passwordRecoveryDetected = false;
+          currentUser = mapUser(result && result.data && result.data.user);
+          notify();
+          return { ok: true };
+        })
+        .catch(function (err) {
+          return { ok: false, error: (err && err.message) || String(err) };
+        });
+    } catch (err) {
+      return Promise.resolve({ ok: false, error: (err && err.message) || String(err) });
+    }
+  }
+
+  // True when this page load is a return visit from a "reset your
+  // password" email link, combining both ways Supabase can signal that:
+  // a "type=recovery" marker already present in the URL at script-load
+  // time (implicit flow), or a PASSWORD_RECOVERY event fired during
+  // init() (PKCE flow - the default for new projects). The PKCE signal
+  // only arrives once the client has processed the URL, which happens
+  // during getSession(); call this only after SW.Auth.init() has
+  // resolved, or it may miss that half of the signal.
+  function isPasswordRecovery() {
+    return passwordRecoveryDetected;
+  }
+
   // Supabase's raw messages are terse and occasionally alarming; these are
   // the ones people actually hit.
   function friendlyAuthError(error) {
@@ -308,6 +425,9 @@ SW.Auth = (function () {
     signInWithPassword: signInWithPassword,
     signUp: signUp,
     signOut: signOut,
-    onChange: onChange
+    onChange: onChange,
+    requestPasswordReset: requestPasswordReset,
+    completePasswordReset: completePasswordReset,
+    isPasswordRecovery: isPasswordRecovery
   };
 })();

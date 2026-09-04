@@ -93,6 +93,18 @@ const C = '33333333-3333-3333-3333-333333333333'; // stranger
     }
   }
 
+
+  // Expenses are no longer written directly: create_expense validates the
+  // whole thing and writes both tables in one transaction.
+  async function createExpense(uid, gid, opts) {
+    var o = opts || {};
+    return as(uid, `select * from public.create_expense($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`, [
+      gid, o.type || 'expense', o.description || 'Groceries', o.amountCents || 4230,
+      o.paidBy || uid, o.splitMode || 'equal', o.category || 'food',
+      o.date || '2026-09-03', o.note || '', JSON.stringify(o.participants || [])
+    ]);
+  }
+
   // ---- A creates a group ----
   const created = await as(A, `select * from public.create_group('Lisbon Flat', 'EUR')`);
   check('a signed-in user can create a group', created.ok, created.error);
@@ -106,17 +118,14 @@ const C = '33333333-3333-3333-3333-333333333333'; // stranger
   check('creator is recorded as owner', ownerRow.rows[0] && ownerRow.rows[0].role === 'owner', ownerRow.rows);
 
   // ---- A adds an expense split between A and B ----
-  const exp = await as(A, `
-    insert into public.expenses (group_id, description, amount_cents, paid_by, split_mode, category, date, created_by)
-    values ($1, 'Groceries', 4230, $2, 'equal', 'food', '2026-09-03', $2) returning id`, [gid, A]);
-  check('group member can add an expense', exp.ok, exp.error);
+  // Only A is in the group at this point; B joins later. Trying to include
+  // B here would (correctly) be refused - you cannot make somebody owe money
+  // in a group they have not joined.
+  const exp = await createExpense(A, gid, {
+    participants: [{ user_id: A, value: 1 }]
+  });
+  check('group member can add an expense through create_expense', exp.ok, exp.error);
   const eid = exp.ok ? exp.res.rows[0].id : null;
-  if (eid) {
-    const parts = await as(A, `
-      insert into public.expense_participants (expense_id, user_id, value)
-      values ($1,$2,1),($1,$3,1)`, [eid, A, B]);
-    check('group member can add expense participants', parts.ok, parts.error);
-  }
 
   // ================= THE ACTUAL SECURITY TESTS =================
   console.log('\n--- isolation: a stranger must see nothing ---');
@@ -135,10 +144,16 @@ const C = '33333333-3333-3333-3333-333333333333'; // stranger
 
   console.log('\n--- isolation: a stranger must not be able to write ---');
 
-  const cInsert = await as(C, `
+  const cInsert = await createExpense(C, gid, {
+    description: 'Fraud', amountCents: 999999, paidBy: C,
+    participants: [{ user_id: C, value: 1 }]
+  });
+  check('stranger cannot add an expense to a group they are not in', !cInsert.ok, cInsert.error);
+
+  const cDirect = await as(C, `
     insert into public.expenses (group_id, description, amount_cents, paid_by, split_mode, category, date, created_by)
-    values ($1, 'Fraud', 999999, $2, 'equal', 'general', '2026-09-03', $2) returning id`, [gid, C]);
-  check('stranger cannot insert an expense into a group they are not in', !cInsert.ok, cInsert.res && cInsert.res.rows);
+    values ($1, 'Direct write', 100, $2, 'equal', 'general', '2026-09-03', $2)`, [gid, C]);
+  check('nobody can write the expenses table directly any more', !cDirect.ok, cDirect.error);
 
   const cUpdate = await as(C, `update public.expenses set amount_cents = 1 where id = $1 returning id`, [eid]);
   check("stranger cannot modify another group's expense",
@@ -215,9 +230,10 @@ const C = '33333333-3333-3333-3333-333333333333'; // stranger
     bProfiles.ok && bProfiles.res.rows.some(r => r.display_name === 'Ann'),
     bProfiles.res && bProfiles.res.rows);
 
-  const bAddExp = await as(B, `
-    insert into public.expenses (group_id, description, amount_cents, paid_by, split_mode, category, date, created_by)
-    values ($1, 'Dinner', 6000, $2, 'equal', 'food', '2026-09-03', $2) returning id`, [gid, B]);
+  const bAddExp = await createExpense(B, gid, {
+    description: 'Dinner', amountCents: 6000, paidBy: B,
+    participants: [{ user_id: A, value: 1 }, { user_id: B, value: 1 }]
+  });
   check('friend can add an expense once joined', bAddExp.ok, bAddExp.error);
 
   const bJoinTwice = await as(B, `select public.join_group_by_code($1) as gid`, [code]);
@@ -233,15 +249,112 @@ const C = '33333333-3333-3333-3333-333333333333'; // stranger
   console.log('\n--- impersonation via forged created_by / paid_by ---');
   const bForge = await as(B, `
     insert into public.expenses (group_id, description, amount_cents, paid_by, split_mode, category, date, created_by)
-    values ($1, 'Forged', 100, $2, 'equal', 'general', '2026-09-03', $2) returning id`, [gid, A]);
-  check('cannot author an expense as somebody else', !bForge.ok, bForge.res && bForge.res.rows);
+    values ($1, 'Forged', 100, $2, 'equal', 'general', '2026-09-03', $2)`, [gid, A]);
+  check('cannot author an expense as somebody else', !bForge.ok, bForge.error);
 
   console.log('\n--- leaving and removal ---');
-  const bLeave = await as(B, `delete from public.group_members where group_id=$1 and user_id=$2 returning user_id`, [gid, B]);
-  check('a member can leave a group', bLeave.ok && bLeave.res.rows.length === 1, bLeave.res && bLeave.res.rows);
-  const bAfterLeave = await as(B, `select id from public.groups`);
-  check('after leaving, the group is no longer visible',
-    bAfterLeave.ok && bAfterLeave.res.rows.length === 0, bAfterLeave.res && bAfterLeave.res.rows);
+  const bLeaveOwing = await as(B, `delete from public.group_members where group_id=$1 and user_id=$2`, [gid, B]);
+  check('a member involved in an expense cannot just walk away from it',
+    !bLeaveOwing.ok, bLeaveOwing.error);
+
+  const aLeaveOwner = await as(A, `delete from public.group_members where group_id=$1 and user_id=$2`, [gid, A]);
+  check('the owner cannot abandon the group, leaving it unmanageable',
+    !aLeaveOwner.ok, aLeaveOwner.error);
+
+  console.log('\n=== server-side validation (the invariant is real now) ===');
+
+  const badExact = await createExpense(A, gid, {
+    description: 'Broken split', amountCents: 10000, splitMode: 'exact',
+    participants: [{ user_id: A, value: 1000 }, { user_id: B, value: 2000 }]
+  });
+  check('a 100.00 expense split as 10.00 + 20.00 is refused', !badExact.ok, badExact.error);
+
+  const noParts = await createExpense(A, gid, { participants: [] });
+  check('an expense with no participants is refused', !noParts.ok, noParts.error);
+
+  const outsiderPays = await createExpense(A, gid, {
+    paidBy: C, participants: [{ user_id: A, value: 1 }]
+  });
+  check('an expense paid by a non-member is refused', !outsiderPays.ok, outsiderPays.error);
+
+  const outsiderOwes = await createExpense(A, gid, {
+    participants: [{ user_id: A, value: 1 }, { user_id: C, value: 1 }]
+  });
+  check('a non-member cannot be made to owe money', !outsiderOwes.ok, outsiderOwes.error);
+
+  const dupe = await createExpense(A, gid, {
+    participants: [{ user_id: A, value: 1 }, { user_id: A, value: 1 }]
+  });
+  check('the same person listed twice is refused', !dupe.ok, dupe.error);
+
+  const badPercent = await createExpense(A, gid, {
+    splitMode: 'percent', participants: [{ user_id: A, value: 30 }, { user_id: B, value: 30 }]
+  });
+  check('percentages that do not reach 100 are refused', !badPercent.ok, badPercent.error);
+
+  const negative = await createExpense(A, gid, {
+    splitMode: 'exact', amountCents: 100,
+    participants: [{ user_id: A, value: 200 }, { user_id: B, value: -100 }]
+  });
+  check('a negative share is refused even though the total matches', !negative.ok, negative.error);
+
+  const huge = await createExpense(A, gid, {
+    amountCents: '9007199254740993', participants: [{ user_id: A, value: 1 }]
+  });
+  check('an amount beyond safe JavaScript precision is refused', !huge.ok, huge.error);
+
+  const longDesc = await createExpense(A, gid, {
+    description: 'X'.repeat(5000), participants: [{ user_id: A, value: 1 }]
+  });
+  check('a 5000-character description is refused', !longDesc.ok, longDesc.error);
+
+  const oldDate = await createExpense(A, gid, {
+    date: '1000-01-01', participants: [{ user_id: A, value: 1 }]
+  });
+  check('an expense dated year 1000 is refused', !oldDate.ok, oldDate.error);
+
+  const goodPercent = await createExpense(A, gid, {
+    description: 'Valid percent', splitMode: 'percent',
+    participants: [{ user_id: A, value: 33.33 }, { user_id: B, value: 66.67 }]
+  });
+  check('a valid percent split is still accepted', goodPercent.ok, goodPercent.error);
+
+  console.log('\n=== concurrency ===');
+  const target = await createExpense(A, gid, {
+    description: 'Contested', participants: [{ user_id: A, value: 1 }, { user_id: B, value: 1 }]
+  });
+  const tid = target.res.rows[0].id;
+  const seenAt = target.res.rows[0].updated_at;
+  const upd1 = await as(A, `select * from public.update_expense($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)`,
+    [tid, 'Edited first', 5000, A, 'equal', 'food', '2026-09-03', '', JSON.stringify([{ user_id: A, value: 1 }, { user_id: B, value: 1 }]), seenAt]);
+  check('an edit based on the version you saw succeeds', upd1.ok, upd1.error);
+  const upd2 = await as(B, `select * from public.update_expense($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)`,
+    [tid, 'Edited second', 7000, B, 'equal', 'food', '2026-09-03', '', JSON.stringify([{ user_id: A, value: 1 }, { user_id: B, value: 1 }]), seenAt]);
+  check('a second edit based on the STALE version is refused instead of silently winning',
+    !upd2.ok, upd2.error);
+
+  console.log('\n=== invite codes can be revoked ===');
+  const oldCode = code;
+  const rotated = await as(A, `select public.rotate_invite_code($1) as code`, [gid]);
+  check('the owner can rotate the invite code', rotated.ok && rotated.res.rows[0].code !== oldCode,
+    rotated.error || rotated.res.rows[0]);
+  const rotateByOther = await as(B, `select public.rotate_invite_code($1)`, [gid]);
+  check('a non-owner cannot rotate it', !rotateByOther.ok, rotateByOther.error);
+  const oldCodeNowDead = await as(C, `select public.join_group_by_code($1)`, [oldCode]);
+  check('the old code stops working immediately', !oldCodeNowDead.ok, oldCodeNowDead.error);
+
+  console.log('\n=== ownership and deletion ===');
+  const transfer = await as(A, `select public.transfer_ownership($1,$2)`, [gid, B]);
+  check('the owner can hand the group over', transfer.ok, transfer.error);
+  const backAgain = await as(B, `select public.transfer_ownership($1,$2)`, [gid, A]);
+  check('the new owner can hand it back', backAgain.ok, backAgain.error);
+
+  const delByMember = await as(B, `select public.delete_group($1)`, [gid]);
+  check('a non-owner cannot delete the group', !delByMember.ok, delByMember.error);
+  const delByOwner = await as(A, `select public.delete_group($1)`, [gid]);
+  check('the owner can delete the group even with expenses in it', delByOwner.ok, delByOwner.error);
+  const gone = await db.query(`select count(*)::int n from public.expenses where group_id=$1`, [gid]);
+  check('deleting the group removed its expenses too', gone.rows[0].n === 0, gone.rows);
 
   console.log('\n--- idempotency ---');
   try { await db.exec(SCHEMA); check('schema.sql can be re-run safely', true); }
