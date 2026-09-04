@@ -1058,6 +1058,14 @@ select#groupCurrencySelect {
     flex-wrap: wrap;
   }
 
+  /* .header-controls holds a lot now (language switch, sync status,
+     account chip, data menu, admin link) - let it wrap onto a second line
+     on narrow screens instead of overflowing the header. */
+  .header-controls {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
   .modal {
     max-width: 100%;
   }
@@ -1153,6 +1161,52 @@ select#groupCurrencySelect {
 
 .form-hint[hidden] {
   display: none !important;
+}
+
+/* ---- Language switch (EN/DE) ----------------------------------------------- */
+/* A compact segmented control, styled after .split-tab. Two copies live in
+   the page - one in the header, one on the sign-in screen - both wired by
+   js/i18n.js, which toggles the "active" class and aria-pressed itself. */
+.lang-switch {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.lang-btn {
+  padding: 6px 10px;
+  border: none;
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.lang-btn + .lang-btn {
+  border-left: 1px solid var(--border);
+}
+
+.lang-btn:hover {
+  background: var(--surface-2);
+}
+
+.lang-btn.active {
+  background: var(--accent);
+  color: #04241d;
+}
+
+/* On the sign-in screen the switch sits in the corner of the full-page
+   overlay rather than inline in the centred card. .auth-screen is the
+   nearest positioned ancestor (position: fixed), so this positions
+   relative to the viewport. */
+.auth-lang-switch {
+  position: absolute;
+  top: 16px;
+  right: 16px;
 }
 
 /* Background content is inert while a modal is open; belt-and-braces for

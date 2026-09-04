@@ -12,7 +12,7 @@
        their money did not save. -->
   <div id="errorBanner" class="error-banner" role="alert" hidden>
     <span id="errorBannerText"></span>
-    <button type="button" class="icon-btn" id="errorBannerDismiss" aria-label="Dismiss">✕</button>
+    <button type="button" class="icon-btn" id="errorBannerDismiss" data-i18n-attr="aria-label:common.dismiss" aria-label="Dismiss">✕</button>
   </div>
 
   <div class="app-shell">
@@ -21,36 +21,44 @@
       <div class="brand"><span class="logo-dot" aria-hidden="true"></span> Splitwise</div>
       <div class="spacer"></div>
       <div class="header-controls">
+        <!-- EN/DE switch. Label is bilingual on purpose: it has to make
+             sense to someone before we know which language they read. -->
+        <div class="lang-switch" role="group" aria-label="Language / Sprache" data-lang-switch>
+          <button type="button" class="lang-btn" data-lang="en" aria-pressed="true">EN</button>
+          <button type="button" class="lang-btn" data-lang="de" aria-pressed="false">DE</button>
+        </div>
+
         <span id="syncStatus" class="sync-status" hidden></span>
 
         <div id="accountControl" class="account-control" hidden>
           <img id="accountAvatar" class="account-avatar" src="" alt="" hidden />
           <span id="accountInitials" class="account-avatar account-initials" aria-hidden="true" hidden></span>
           <span id="accountName" class="account-name"></span>
-          <button type="button" class="btn btn-sm" id="signOutBtn">Sign out</button>
+          <button type="button" class="btn btn-sm" id="signOutBtn" data-i18n="header.signOut">Sign out</button>
         </div>
 
-        <label for="currentUserSelect" class="visually-hidden">Current user</label>
-        <select id="currentUserSelect" aria-label="Current user"></select>
+        <label for="currentUserSelect" class="visually-hidden" data-i18n="header.currentUser">Current user</label>
+        <select id="currentUserSelect" aria-label="Current user" data-i18n-attr="aria-label:header.currentUser"></select>
 
         <div class="dropdown">
-          <button id="dataMenuBtn" class="btn" aria-haspopup="true" aria-expanded="false">
+          <button id="dataMenuBtn" class="btn" aria-haspopup="true" aria-expanded="false" data-i18n="header.dataMenu">
             Data ▾
           </button>
           <div id="dataMenu" class="dropdown-menu" hidden role="menu">
-            <button type="button" id="exportBtn" role="menuitem">Export JSON</button>
-            <button type="button" id="importBtn" role="menuitem">Import JSON…</button>
+            <button type="button" id="exportBtn" role="menuitem" data-i18n="header.export">Export JSON</button>
+            <button type="button" id="importBtn" role="menuitem" data-i18n="header.import">Import JSON…</button>
             <!-- Kept in the accessibility tree (not `hidden`) because the
                  Import button forwards clicks to it, so it needs a name. -->
             <input type="file" id="importFileInput" accept="application/json"
-                   class="visually-hidden" aria-label="Choose a JSON file to import" />
+                   class="visually-hidden" aria-label="Choose a JSON file to import"
+                   data-i18n-attr="aria-label:header.importFileAria" />
             <hr />
-            <button type="button" id="demoBtn" role="menuitem">Load demo data</button>
-            <button type="button" id="resetBtn" role="menuitem">Reset all data</button>
+            <button type="button" id="demoBtn" role="menuitem" data-i18n="header.loadDemo">Load demo data</button>
+            <button type="button" id="resetBtn" role="menuitem" data-i18n="header.resetAll">Reset all data</button>
           </div>
         </div>
 
-        <a class="btn" href="admin.html">Admin</a>
+        <a class="btn" href="admin.html" data-i18n="header.admin">Admin</a>
       </div>
     </header>
 
@@ -59,12 +67,12 @@
       <!-- ---------------------------- Sidebar ---------------------------- -->
       <nav class="sidebar" aria-label="Groups">
         <div class="sidebar-header">
-          <h2>Groups</h2>
+          <h2 data-i18n="sidebar.groups">Groups</h2>
         </div>
         <ul class="group-list" id="groupList"></ul>
         <div class="sidebar-footer">
-          <button type="button" class="btn btn-primary btn-block" id="newGroupBtn">+ New group</button>
-          <button type="button" class="btn btn-block" id="joinGroupBtn">Join with code</button>
+          <button type="button" class="btn btn-primary btn-block" id="newGroupBtn" data-i18n="sidebar.newGroup">+ New group</button>
+          <button type="button" class="btn btn-block" id="joinGroupBtn" data-i18n="sidebar.joinWithCode">Join with code</button>
         </div>
       </nav>
 
@@ -79,9 +87,15 @@
   <!-- Shown when Supabase is configured and no one is signed in yet. Full
        page overlay; js/app.js toggles `hidden` on it. -->
   <div id="authScreen" class="auth-screen" hidden>
+    <!-- Same switch as the header, so a German friend hitting this screen
+         cold can fix the language before reading anything else. -->
+    <div class="lang-switch auth-lang-switch" role="group" aria-label="Language / Sprache" data-lang-switch>
+      <button type="button" class="lang-btn" data-lang="en" aria-pressed="true">EN</button>
+      <button type="button" class="lang-btn" data-lang="de" aria-pressed="false">DE</button>
+    </div>
     <div class="auth-card">
       <div class="brand auth-brand"><span class="logo-dot" aria-hidden="true"></span> Splitwise</div>
-      <p class="auth-tagline">
+      <p class="auth-tagline" data-i18n="auth.tagline">
         A shared expense tracker for friends, roommates and trips — split
         costs fairly and keep track of who owes who.
       </p>
@@ -90,38 +104,39 @@
            user and this project's own database. -->
       <form id="authForm" novalidate>
         <div class="form-row" id="authNameRow" hidden>
-          <label for="authNameInput">Your name</label>
+          <label for="authNameInput" data-i18n="auth.nameLabel">Your name</label>
           <input type="text" id="authNameInput" autocomplete="name"
-                 maxlength="60" placeholder="e.g. Nils" />
-          <p class="hint">This is what your friends will see next to each expense.</p>
+                 maxlength="60" placeholder="e.g. Nils" data-i18n-attr="placeholder:auth.namePlaceholder" />
+          <p class="hint" data-i18n="auth.nameHint">This is what your friends will see next to each expense.</p>
         </div>
 
         <div class="form-row">
-          <label for="authEmailInput">Email</label>
+          <label for="authEmailInput" data-i18n="auth.emailLabel">Email</label>
           <input type="email" id="authEmailInput" autocomplete="email"
                  required placeholder="you@example.com" />
         </div>
 
         <div class="form-row">
-          <label for="authPasswordInput">Password</label>
+          <label for="authPasswordInput" data-i18n="auth.passwordLabel">Password</label>
           <input type="password" id="authPasswordInput" required minlength="8"
-                 autocomplete="current-password" placeholder="At least 8 characters" />
+                 autocomplete="current-password" placeholder="At least 8 characters"
+                 data-i18n-attr="placeholder:auth.passwordPlaceholder" />
         </div>
 
         <p class="form-error" id="authError" role="alert"></p>
 
-        <button type="submit" class="btn btn-primary btn-block" id="authSubmitBtn">Sign in</button>
+        <button type="submit" class="btn btn-primary btn-block" id="authSubmitBtn" data-i18n="auth.signIn">Sign in</button>
       </form>
 
       <p class="auth-switch">
-        <span id="authSwitchPrompt">No account yet?</span>
-        <button type="button" class="link-btn" id="authSwitchBtn">Create one</button>
+        <span id="authSwitchPrompt" data-i18n="auth.noAccountYet">No account yet?</span>
+        <button type="button" class="link-btn" id="authSwitchBtn" data-i18n="auth.createOne">Create one</button>
       </p>
 
       <p class="auth-warning" id="demoDataWarning" hidden></p>
 
-      <button type="button" class="link-btn auth-demo-btn" id="tryDemoBtn">Try the demo without an account</button>
-      <p class="auth-hint">Demo data stays only in this browser — it is not shared with anyone.</p>
+      <button type="button" class="link-btn auth-demo-btn" id="tryDemoBtn" data-i18n="auth.tryDemo">Try the demo without an account</button>
+      <p class="auth-hint" data-i18n="auth.demoHint">Demo data stays only in this browser — it is not shared with anyone.</p>
     </div>
   </div>
 
@@ -129,19 +144,19 @@
   <div class="modal-overlay" id="promptModal" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="promptTitle">
       <div class="modal-header">
-        <h2 id="promptTitle">Rename</h2>
-        <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog">✕</button>
+        <h2 id="promptTitle" data-i18n="modal.renameDefaultTitle">Rename</h2>
+        <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog" data-i18n-attr="aria-label:common.closeDialog">✕</button>
       </div>
       <form id="promptForm">
         <div class="form-row">
-          <label for="promptInput" id="promptLabel">Value</label>
+          <label for="promptInput" id="promptLabel" data-i18n="common.value">Value</label>
           <input type="text" id="promptInput" maxlength="80" />
           <p class="hint" id="promptHint"></p>
         </div>
         <p class="form-error" id="promptError" role="alert"></p>
         <div class="modal-actions">
-          <button type="button" class="btn" data-close-modal>Cancel</button>
-          <button type="submit" class="btn btn-primary" id="promptSubmitBtn">Save</button>
+          <button type="button" class="btn" data-close-modal data-i18n="common.cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="promptSubmitBtn" data-i18n="common.save">Save</button>
         </div>
       </form>
     </div>
@@ -151,23 +166,23 @@
   <div class="modal-overlay" id="confirmModal" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
       <div class="modal-header">
-        <h2 id="confirmTitle">Are you sure?</h2>
-        <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog">✕</button>
+        <h2 id="confirmTitle" data-i18n="common.areYouSure">Are you sure?</h2>
+        <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog" data-i18n-attr="aria-label:common.closeDialog">✕</button>
       </div>
       <form id="confirmForm">
         <p id="confirmBody" class="confirm-body"></p>
         <!-- Only shown for the truly destructive ones: you have to type the
              name back before the button will do anything. -->
         <div class="form-row" id="confirmTypeRow" hidden>
-          <label for="confirmTypeInput" id="confirmTypeLabel">Type the name to confirm</label>
+          <label for="confirmTypeInput" id="confirmTypeLabel" data-i18n="confirm.typeToConfirmDefault">Type the name to confirm</label>
           <input type="text" id="confirmTypeInput" autocomplete="off" />
         </div>
         <p class="form-error" id="confirmError" role="alert"></p>
         <div class="modal-actions">
           <!-- Cancel comes first and takes focus, so the dangerous button is
                never one stray Enter away. -->
-          <button type="button" class="btn" data-close-modal id="confirmCancelBtn">Cancel</button>
-          <button type="submit" class="btn btn-danger" id="confirmOkBtn">Delete</button>
+          <button type="button" class="btn" data-close-modal id="confirmCancelBtn" data-i18n="common.cancel">Cancel</button>
+          <button type="submit" class="btn btn-danger" id="confirmOkBtn" data-i18n="common.delete">Delete</button>
         </div>
       </form>
     </div>
@@ -180,16 +195,17 @@
   <div class="modal-overlay" id="groupModalOverlay" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="groupModalTitle">
       <div class="modal-header">
-        <h2 id="groupModalTitle">New group</h2>
-        <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog">✕</button>
+        <h2 id="groupModalTitle" data-i18n="group.newTitle">New group</h2>
+        <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog" data-i18n-attr="aria-label:common.closeDialog">✕</button>
       </div>
       <form id="groupForm">
         <div class="form-row">
-          <label for="groupNameInput">Group name</label>
-          <input type="text" id="groupNameInput" required maxlength="60" placeholder="e.g. Lisbon Flat" />
+          <label for="groupNameInput" data-i18n="group.nameLabel">Group name</label>
+          <input type="text" id="groupNameInput" required maxlength="60" placeholder="e.g. Lisbon Flat"
+                 data-i18n-attr="placeholder:group.namePlaceholder" />
         </div>
         <div class="form-row">
-          <label for="groupCurrencySelect">Currency</label>
+          <label for="groupCurrencySelect" data-i18n="group.currencyLabel">Currency</label>
           <select id="groupCurrencySelect">
             <option value="EUR">EUR (€)</option>
             <option value="USD">USD ($)</option>
@@ -198,14 +214,15 @@
           </select>
         </div>
         <div class="form-row" id="groupMembersRow">
-          <label for="groupMembersInput">Members (comma-separated)</label>
-          <input type="text" id="groupMembersInput" placeholder="e.g. Nils, Mara, Tomás" />
-          <p class="hint">List everyone in the group, including yourself.</p>
+          <label for="groupMembersInput" data-i18n="group.membersLabel">Members (comma-separated)</label>
+          <input type="text" id="groupMembersInput" placeholder="e.g. Nils, Mara, Tomás"
+                 data-i18n-attr="placeholder:group.membersPlaceholder" />
+          <p class="hint" data-i18n="group.membersHint">List everyone in the group, including yourself.</p>
         </div>
         <p class="form-error" id="groupFormError" role="alert"></p>
         <div class="modal-actions">
-          <button type="button" class="btn" data-close-modal>Cancel</button>
-          <button type="submit" class="btn btn-primary">Create group</button>
+          <button type="button" class="btn" data-close-modal data-i18n="common.cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary" data-i18n="group.createSubmit">Create group</button>
         </div>
       </form>
     </div>
@@ -215,70 +232,72 @@
   <div class="modal-overlay" id="expenseModalOverlay" hidden>
     <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="expenseModalTitle">
       <div class="modal-header">
-        <h2 id="expenseModalTitle">Add expense</h2>
-        <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog">✕</button>
+        <h2 id="expenseModalTitle" data-i18n="expense.addTitle">Add expense</h2>
+        <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog" data-i18n-attr="aria-label:common.closeDialog">✕</button>
       </div>
       <form id="expenseForm">
         <input type="hidden" id="expenseIdInput" />
         <div class="form-row">
-          <label for="expenseDescInput">Description</label>
-          <input type="text" id="expenseDescInput" required maxlength="120" placeholder="e.g. Groceries" />
+          <label for="expenseDescInput" data-i18n="expense.descLabel">Description</label>
+          <input type="text" id="expenseDescInput" required maxlength="120" placeholder="e.g. Groceries"
+                 data-i18n-attr="placeholder:expense.descPlaceholder" />
         </div>
         <div class="form-grid">
           <div class="form-row">
-            <label for="expenseAmountInput">Amount</label>
-            <input type="text" id="expenseAmountInput" inputmode="decimal" required placeholder="0.00" />
+            <label for="expenseAmountInput" data-i18n="expense.amountLabel">Amount</label>
+            <input type="text" id="expenseAmountInput" inputmode="decimal" required placeholder="0.00"
+                   data-i18n-attr="placeholder:amount.placeholder" />
           </div>
           <div class="form-row">
-            <label for="expensePaidBySelect">Paid by</label>
+            <label for="expensePaidBySelect" data-i18n="expense.paidByLabel">Paid by</label>
             <select id="expensePaidBySelect"></select>
           </div>
         </div>
         <div class="form-grid">
           <div class="form-row">
-            <label for="expenseCategorySelect">Category</label>
+            <label for="expenseCategorySelect" data-i18n="expense.categoryLabel">Category</label>
             <select id="expenseCategorySelect">
-              <option value="general">🧾 General</option>
-              <option value="food">🍔 Food</option>
-              <option value="rent">🏠 Rent</option>
-              <option value="transport">🚗 Transport</option>
-              <option value="fun">🎉 Fun</option>
-              <option value="utilities">💡 Utilities</option>
-              <option value="travel">✈️ Travel</option>
+              <option value="general" data-i18n="category.general">🧾 General</option>
+              <option value="food" data-i18n="category.food">🍔 Food</option>
+              <option value="rent" data-i18n="category.rent">🏠 Rent</option>
+              <option value="transport" data-i18n="category.transport">🚗 Transport</option>
+              <option value="fun" data-i18n="category.fun">🎉 Fun</option>
+              <option value="utilities" data-i18n="category.utilities">💡 Utilities</option>
+              <option value="travel" data-i18n="category.travel">✈️ Travel</option>
             </select>
           </div>
           <div class="form-row">
-            <label for="expenseDateInput">Date</label>
+            <label for="expenseDateInput" data-i18n="expense.dateLabel">Date</label>
             <input type="date" id="expenseDateInput" required />
           </div>
         </div>
 
         <div class="form-row">
-          <label id="splitModeLabel">Split</label>
+          <label id="splitModeLabel" data-i18n="expense.splitLabel">Split</label>
           <div class="split-tabs" role="tablist" aria-labelledby="splitModeLabel" id="splitTabs">
-            <button type="button" class="split-tab active" data-mode="equal" role="tab" aria-selected="true">Equal</button>
-            <button type="button" class="split-tab" data-mode="exact" role="tab" aria-selected="false">Exact</button>
-            <button type="button" class="split-tab" data-mode="percent" role="tab" aria-selected="false">Percent</button>
-            <button type="button" class="split-tab" data-mode="shares" role="tab" aria-selected="false">Shares</button>
+            <button type="button" class="split-tab active" data-mode="equal" role="tab" aria-selected="true" data-i18n="splitMode.equal">Equal</button>
+            <button type="button" class="split-tab" data-mode="exact" role="tab" aria-selected="false" data-i18n="splitMode.exact">Exact</button>
+            <button type="button" class="split-tab" data-mode="percent" role="tab" aria-selected="false" data-i18n="splitMode.percent">Percent</button>
+            <button type="button" class="split-tab" data-mode="shares" role="tab" aria-selected="false" data-i18n="splitMode.shares">Shares</button>
           </div>
         </div>
 
         <div class="form-row">
-          <label>Participants</label>
+          <label data-i18n="expense.participantsLabel">Participants</label>
           <div id="participantsList"></div>
         </div>
 
         <div class="split-preview" id="splitPreview" aria-live="polite"></div>
 
         <div class="form-row">
-          <label for="expenseNoteInput">Note (optional)</label>
+          <label for="expenseNoteInput" data-i18n="expense.noteLabel">Note (optional)</label>
           <textarea id="expenseNoteInput" maxlength="300"></textarea>
         </div>
 
         <p class="form-error" id="expenseFormError" role="alert"></p>
         <div class="modal-actions">
-          <button type="button" class="btn" data-close-modal>Cancel</button>
-          <button type="submit" class="btn btn-primary" id="expenseSubmitBtn">Save expense</button>
+          <button type="button" class="btn" data-close-modal data-i18n="common.cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="expenseSubmitBtn" data-i18n="expense.saveSubmit">Save expense</button>
         </div>
       </form>
     </div>
@@ -288,34 +307,35 @@
   <div class="modal-overlay" id="settleModalOverlay" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settleModalTitle">
       <div class="modal-header">
-        <h2 id="settleModalTitle">Settle up</h2>
-        <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog">✕</button>
+        <h2 id="settleModalTitle" data-i18n="group.settleUp">Settle up</h2>
+        <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog" data-i18n-attr="aria-label:common.closeDialog">✕</button>
       </div>
       <form id="settleForm">
         <div class="form-grid">
           <div class="form-row">
-            <label for="settleFromSelect">From</label>
+            <label for="settleFromSelect" data-i18n="settle.fromLabel">From</label>
             <select id="settleFromSelect"></select>
           </div>
           <div class="form-row">
-            <label for="settleToSelect">To</label>
+            <label for="settleToSelect" data-i18n="settle.toLabel">To</label>
             <select id="settleToSelect"></select>
           </div>
         </div>
         <div class="form-grid">
           <div class="form-row">
-            <label for="settleAmountInput">Amount</label>
-            <input type="text" id="settleAmountInput" inputmode="decimal" required placeholder="0.00" />
+            <label for="settleAmountInput" data-i18n="expense.amountLabel">Amount</label>
+            <input type="text" id="settleAmountInput" inputmode="decimal" required placeholder="0.00"
+                   data-i18n-attr="placeholder:amount.placeholder" />
           </div>
           <div class="form-row">
-            <label for="settleDateInput">Date</label>
+            <label for="settleDateInput" data-i18n="expense.dateLabel">Date</label>
             <input type="date" id="settleDateInput" required />
           </div>
         </div>
         <p class="form-error" id="settleFormError" role="alert"></p>
         <div class="modal-actions">
-          <button type="button" class="btn" data-close-modal>Cancel</button>
-          <button type="submit" class="btn btn-primary">Record settlement</button>
+          <button type="button" class="btn" data-close-modal data-i18n="common.cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary" data-i18n="settle.recordSubmit">Record settlement</button>
         </div>
       </form>
     </div>
@@ -325,15 +345,15 @@
   <div class="modal-overlay" id="inviteModal" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="inviteModalTitle">
       <div class="modal-header">
-        <h2 id="inviteModalTitle">Invite to group</h2>
-        <button type="button" class="icon-btn" data-close-modal aria-label="Close">✕</button>
+        <h2 id="inviteModalTitle" data-i18n="invite.title">Invite to group</h2>
+        <button type="button" class="icon-btn" data-close-modal aria-label="Close" data-i18n-attr="aria-label:common.close">✕</button>
       </div>
-      <p class="hint">Anyone with this code can join and see this group's expenses.</p>
+      <p class="hint" data-i18n="invite.hint">Anyone with this code can join and see this group's expenses.</p>
       <div class="invite-code-block" id="inviteCodeText"></div>
       <div class="modal-actions">
-        <button type="button" class="btn" data-close-modal>Close</button>
-        <button type="button" class="btn btn-primary" id="copyInviteLinkBtn">Copy invite link</button>
-        <button type="button" class="btn" id="copyInviteBtn">Copy code only</button>
+        <button type="button" class="btn" data-close-modal data-i18n="common.close">Close</button>
+        <button type="button" class="btn btn-primary" id="copyInviteLinkBtn" data-i18n="invite.copyLink">Copy invite link</button>
+        <button type="button" class="btn" id="copyInviteBtn" data-i18n="invite.copyCode">Copy code only</button>
       </div>
     </div>
   </div>
@@ -342,27 +362,30 @@
   <div class="modal-overlay" id="joinModal" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="joinModalTitle">
       <div class="modal-header">
-        <h2 id="joinModalTitle">Join a group</h2>
-        <button type="button" class="icon-btn" data-close-modal aria-label="Close">✕</button>
+        <h2 id="joinModalTitle" data-i18n="join.title">Join a group</h2>
+        <button type="button" class="icon-btn" data-close-modal aria-label="Close" data-i18n-attr="aria-label:common.close">✕</button>
       </div>
       <form id="joinModalForm">
         <div class="form-row">
-          <label for="joinCodeInput">Invite code</label>
+          <label for="joinCodeInput" data-i18n="join.codeLabel">Invite code</label>
           <input type="text" id="joinCodeInput" required maxlength="20" autocapitalize="characters"
-                 autocomplete="off" placeholder="e.g. AB12CD" class="invite-code-input" />
-          <p class="hint">Ask a group member for their invite code.</p>
+                 autocomplete="off" placeholder="e.g. AB12CD" class="invite-code-input"
+                 data-i18n-attr="placeholder:join.codePlaceholder" />
+          <p class="hint" data-i18n="join.codeHint">Ask a group member for their invite code.</p>
         </div>
         <p class="form-error" id="joinError" role="alert"></p>
         <div class="modal-actions">
-          <button type="button" class="btn" data-close-modal>Cancel</button>
-          <button type="submit" class="btn btn-primary">Join</button>
+          <button type="button" class="btn" data-close-modal data-i18n="common.cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary" data-i18n="join.submit">Join</button>
         </div>
       </form>
     </div>
   </div>
 
   <!-- Script order per spec: vendored supabase client, config, auth,
-       model, store, remote-store, workflows, app -->
+       model, store, remote-store, workflows, i18n, app. i18n.js has to
+       come after all the markup above (it translates it on load) and
+       before app.js (which calls into SW.I18n while wiring the UI). -->
   <script src="vendor/supabase.js"></script>
   <script src="js/config.js"></script>
   <script src="js/auth.js"></script>
@@ -371,6 +394,7 @@
   <script src="js/store.js"></script>
   <script src="js/remote-store.js"></script>
   <script src="js/workflows.js"></script>
+  <script src="js/i18n.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

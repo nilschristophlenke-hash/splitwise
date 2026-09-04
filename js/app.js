@@ -53,6 +53,18 @@ SW.App = SW.App || {};
       .replace(/'/g, '&#39;');
   }
 
+  // t() is a short alias for SW.I18n.t() - this file calls it constantly,
+  // so the full name would add a lot of noise.
+  function t(key, params) {
+    return SW.I18n.t(key, params);
+  }
+
+  // unit(count, key) picks the singular or plural form of a pluralized
+  // dictionary entry, e.g. unit(3, 'unit.expense') -> "expenses".
+  function unit(count, key) {
+    return t(count === 1 ? key + '.one' : key + '.other');
+  }
+
   var CATEGORY_ICONS = {
     general: '🧾',
     food: '🍔',
@@ -72,16 +84,57 @@ SW.App = SW.App || {};
     return d.getFullYear() + '-' + mm + '-' + dd;
   }
 
-  // Turns "2026-09-03" into "Sep 3, 2026" for friendlier display.
+  // Month abbreviations for formatDateDisplay, one list per language. Kept
+  // next to each other so it's obvious they have to stay in sync.
+  var MONTH_NAMES = {
+    en: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+    de: ['Jan', 'Feb', 'März', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez']
+  };
+
+  // Turns "2026-09-03" into a locale-appropriate display date: "Sep 3, 2026"
+  // in English, "3. Sep 2026" in German (day first, no comma - the dot after
+  // the day is the German ordinal marker, not part of the month).
   function formatDateDisplay(iso) {
     if (!iso) return '';
     var parts = iso.split('-');
     if (parts.length !== 3) return iso;
-    var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    var lang = SW.I18n ? SW.I18n.getLang() : 'en';
+    var months = MONTH_NAMES[lang] || MONTH_NAMES.en;
     var monthIndex = parseInt(parts[1], 10) - 1;
     var day = parseInt(parts[2], 10);
     var monthName = months[monthIndex] || parts[1];
-    return monthName + ' ' + day + ', ' + parts[0];
+    return lang === 'de'
+      ? day + '. ' + monthName + ' ' + parts[0]
+      : monthName + ' ' + day + ', ' + parts[0];
+  }
+
+  // --------------------------------------------------------------------
+  // Money display. js/model.js's formatMoney/formatSigned always render
+  // "€12.34" (symbol first, dot decimal) - correct for English, wrong for
+  // German ("12,34 €": symbol after, comma decimal). We are not allowed to
+  // touch js/model.js (it owns storage/calculation, not display), so this
+  // is a display-only wrapper around it: same cents, same currency, just
+  // reformatted for the active language before it reaches the page.
+  // --------------------------------------------------------------------
+  var CURRENCY_SYMBOLS = { EUR: '€', USD: '$', GBP: '£', CHF: 'CHF' };
+
+  function fmtMoney(cents, currency) {
+    if (SW.I18n && SW.I18n.getLang() === 'de') {
+      var negative = cents < 0;
+      var amountStr = (Math.abs(cents) / 100).toFixed(2).replace('.', ',');
+      var symbol = CURRENCY_SYMBOLS[currency];
+      var body = symbol !== undefined ? amountStr + ' ' + symbol : amountStr + ' ' + (currency || '?');
+      return (negative ? '-' : '') + body;
+    }
+    return SW.Model.formatMoney(cents, currency);
+  }
+
+  function fmtSigned(cents, currency) {
+    if (SW.I18n && SW.I18n.getLang() === 'de') {
+      var sign = cents < 0 ? '-' : '+';
+      return sign + fmtMoney(Math.abs(cents), currency);
+    }
+    return SW.Model.formatSigned(cents, currency);
   }
 
   // --------------------------------------------------------------------
@@ -152,7 +205,7 @@ SW.App = SW.App || {};
     if (typeof opts.undo === 'function') {
       var undoBtn = document.createElement('button');
       undoBtn.type = 'button';
-      undoBtn.textContent = 'Undo';
+      undoBtn.textContent = t('misc.undo');
       undoBtn.addEventListener('click', function () {
         clearTimeout(timeoutId);
         toastEl.remove();
@@ -257,7 +310,7 @@ SW.App = SW.App || {};
       byId[m.id] = m.name;
     });
     return function (memberId) {
-      return byId[memberId] || 'Unknown';
+      return byId[memberId] || t('misc.unknownMember');
     };
   }
 
@@ -282,7 +335,7 @@ SW.App = SW.App || {};
     var select = qs('#currentUserSelect');
     var group = getCurrentGroup(state);
     if (!group) {
-      select.innerHTML = '<option value="">No group selected</option>';
+      select.innerHTML = '<option value="">' + esc(t('misc.noGroupSelected')) + '</option>';
       select.disabled = true;
       return;
     }
@@ -303,7 +356,7 @@ SW.App = SW.App || {};
     var listEl = qs('#groupList');
 
     if (state.groups.length === 0) {
-      listEl.innerHTML = '<li class="group-sub" style="padding:10px 12px;">No groups yet.</li>';
+      listEl.innerHTML = '<li class="group-sub" style="padding:10px 12px;">' + esc(t('sidebar.noGroupsYet')) + '</li>';
       return;
     }
 
@@ -315,7 +368,7 @@ SW.App = SW.App || {};
         if (net !== undefined) {
           var cls = net > 0 ? 'positive' : net < 0 ? 'negative' : 'zero';
           figureHtml =
-            '<span class="group-balance-figure ' + cls + '">' + esc(SW.Model.formatSigned(net, g.currency)) + '</span>';
+            '<span class="group-balance-figure ' + cls + '">' + esc(fmtSigned(net, g.currency)) + '</span>';
         }
         var active = g.id === state.ui.currentGroupId;
         return (
@@ -332,7 +385,9 @@ SW.App = SW.App || {};
           '</span>' +
           '<span class="group-sub">' +
           g.members.length +
-          ' members · ' +
+          ' ' +
+          esc(unit(g.members.length, 'unit.member')) +
+          ' · ' +
           esc(g.currency) +
           '</span>' +
           '</button>' +
@@ -362,8 +417,8 @@ SW.App = SW.App || {};
     var group = getCurrentGroup(state);
     if (!group) {
       mainEl.innerHTML =
-        '<div class="empty-state"><div class="empty-icon">👈</div><h3>Select a group</h3>' +
-        '<p>Choose a group from the sidebar to see its expenses and balances.</p></div>';
+        '<div class="empty-state"><div class="empty-icon">👈</div><h3>' + esc(t('empty.selectGroupTitle')) + '</h3>' +
+        '<p>' + esc(t('empty.selectGroupBody')) + '</p></div>';
       return;
     }
 
@@ -380,9 +435,9 @@ SW.App = SW.App || {};
     return (
       '<div class="empty-state">' +
       '<div class="empty-icon">👥</div>' +
-      '<h3>No groups yet</h3>' +
-      '<p>Create a group to start splitting expenses with friends.</p>' +
-      '<button type="button" class="btn btn-primary" id="emptyNewGroupBtn">+ New group</button>' +
+      '<h3>' + esc(t('empty.noGroupsTitle')) + '</h3>' +
+      '<p>' + esc(t('empty.noGroupsBody')) + '</p>' +
+      '<button type="button" class="btn btn-primary" id="emptyNewGroupBtn">' + esc(t('sidebar.newGroup')) + '</button>' +
       '</div>'
     );
   }
@@ -408,26 +463,30 @@ SW.App = SW.App || {};
       '<div>' +
       '<h1 id="groupNameHeading">' +
       esc(group.name) +
-      ' <button type="button" class="icon-btn" id="renameGroupBtn" aria-label="Rename group">✏️</button>' +
-      ' <button type="button" class="icon-btn" id="deleteGroupBtn" aria-label="Delete group">🗑️</button>' +
+      ' <button type="button" class="icon-btn" id="renameGroupBtn" aria-label="' + esc(t('group.rename')) + '">✏️</button>' +
+      ' <button type="button" class="icon-btn" id="deleteGroupBtn" aria-label="' + esc(t('group.delete')) + '">🗑️</button>' +
       '</h1>' +
       '<div class="member-chips">' +
       renderMemberChips(group) +
       '</div>' +
       '<div class="group-meta">' +
       esc(group.currency) +
-      ' · Total spent: ' +
-      esc(SW.Model.formatMoney(totals.totalSpentCents, group.currency)) +
+      ' · ' +
+      esc(t('group.totalSpent')) +
+      ' ' +
+      esc(fmtMoney(totals.totalSpentCents, group.currency)) +
       ' · ' +
       totals.expenseCount +
-      ' expense' +
-      (totals.expenseCount === 1 ? '' : 's') +
-      (totals.settlementCount ? ' · ' + totals.settlementCount + ' settlement' + (totals.settlementCount === 1 ? '' : 's') : '') +
+      ' ' +
+      esc(unit(totals.expenseCount, 'unit.expense')) +
+      (totals.settlementCount
+        ? ' · ' + totals.settlementCount + ' ' + esc(unit(totals.settlementCount, 'unit.settlement'))
+        : '') +
       '</div>' +
       '</div>' +
       '<div class="group-actions">' +
-      '<button type="button" class="btn" id="settleUpBtn">Settle up</button>' +
-      '<button type="button" class="btn btn-primary" id="addExpenseBtn">+ Add expense</button>' +
+      '<button type="button" class="btn" id="settleUpBtn">' + esc(t('group.settleUp')) + '</button>' +
+      '<button type="button" class="btn btn-primary" id="addExpenseBtn">' + esc(t('group.addExpense')) + '</button>' +
       '</div>' +
       '</div>' +
       '<div class="panels-row">' +
@@ -435,7 +494,7 @@ SW.App = SW.App || {};
       renderSettlementsPanel(group, state) +
       '</div>' +
       '<div class="panel">' +
-      '<h2>Expenses</h2>' +
+      '<h2>' + esc(t('panel.expenses')) + '</h2>' +
       renderExpenseList(group, expenses) +
       '</div>'
     );
@@ -449,8 +508,8 @@ SW.App = SW.App || {};
           esc(m.name) +
           ' <button type="button" class="icon-btn remove-member-btn" data-member="' +
           esc(m.id) +
-          '" aria-label="Remove ' +
-          esc(m.name) +
+          '" aria-label="' +
+          esc(t('group.removeMemberAria', { name: m.name })) +
           '" style="width:18px;height:18px;font-size:11px;">✕</button></span>'
         );
       })
@@ -458,8 +517,8 @@ SW.App = SW.App || {};
     // Offline you invent members by typing a name. Signed in, a member is a
     // real account, so the only way to add one is to share the invite code.
     var action = isRemote()
-      ? ' <button type="button" class="btn btn-sm" id="inviteMemberBtn">Invite</button>'
-      : ' <button type="button" class="btn btn-sm" id="addMemberBtn">+ Member</button>';
+      ? ' <button type="button" class="btn btn-sm" id="inviteMemberBtn">' + esc(t('group.invite')) + '</button>'
+      : ' <button type="button" class="btn btn-sm" id="addMemberBtn">' + esc(t('group.addMember')) + '</button>';
     return chips + action;
   }
 
@@ -475,12 +534,12 @@ SW.App = SW.App || {};
           '</span><span class="balance-figure ' +
           cls +
           '">' +
-          esc(SW.Model.formatSigned(net, group.currency)) +
+          esc(fmtSigned(net, group.currency)) +
           '</span></div>'
         );
       })
       .join('');
-    return '<div class="panel"><h2>Balances</h2>' + rows + '</div>';
+    return '<div class="panel"><h2>' + esc(t('panel.balances')) + '</h2>' + rows + '</div>';
   }
 
   function renderSettlementsPanel(group, state) {
@@ -489,7 +548,10 @@ SW.App = SW.App || {};
     var memberName = makeMemberNameLookup(group);
 
     if (suggestions.length === 0) {
-      return '<div class="panel"><h2>Suggested settlements</h2><p class="hint">Everyone is settled up. 🎉</p></div>';
+      return (
+        '<div class="panel"><h2>' + esc(t('panel.suggestedSettlements')) + '</h2>' +
+        '<p class="hint">' + esc(t('panel.allSettled')) + '</p></div>'
+      );
     }
 
     var rows = suggestions
@@ -501,16 +563,16 @@ SW.App = SW.App || {};
           ' → ' +
           esc(memberName(s.to)) +
           ': ' +
-          esc(SW.Model.formatMoney(s.amountCents, group.currency)) +
+          esc(fmtMoney(s.amountCents, group.currency)) +
           '</span>' +
           '<button type="button" class="btn btn-sm record-settlement-btn" data-idx="' +
           idx +
-          '">Record</button>' +
+          '">' + esc(t('panel.record')) + '</button>' +
           '</div>'
         );
       })
       .join('');
-    return '<div class="panel"><h2>Suggested settlements</h2>' + rows + '</div>';
+    return '<div class="panel"><h2>' + esc(t('panel.suggestedSettlements')) + '</h2>' + rows + '</div>';
   }
 
   function renderExpenseList(group, expenses) {
@@ -518,9 +580,9 @@ SW.App = SW.App || {};
       return (
         '<div class="empty-state">' +
         '<div class="empty-icon">🧾</div>' +
-        '<h3>No expenses yet</h3>' +
-        '<p>Add your first expense to start splitting costs.</p>' +
-        '<button type="button" class="btn btn-primary" id="emptyAddExpenseBtn">Add expense</button>' +
+        '<h3>' + esc(t('empty.noExpensesTitle')) + '</h3>' +
+        '<p>' + esc(t('empty.noExpensesBody')) + '</p>' +
+        '<button type="button" class="btn btn-primary" id="emptyAddExpenseBtn">' + esc(t('expense.addTitle')) + '</button>' +
         '</div>'
       );
     }
@@ -542,8 +604,11 @@ SW.App = SW.App || {};
   function renderExpenseRow(group, expense, memberName) {
     if (expense.type === 'settlement') {
       var receiver = expense.participants[0] || {};
-      var text =
-        memberName(expense.paidBy) + ' paid ' + memberName(receiver.memberId) + ' ' + SW.Model.formatMoney(expense.amountCents, group.currency);
+      var text = t('expense.settlementLine', {
+        payer: memberName(expense.paidBy),
+        receiver: memberName(receiver.memberId),
+        amount: fmtMoney(expense.amountCents, group.currency)
+      });
       return (
         '<li class="expense-item settlement-item">' +
         '<div class="expense-row" data-id="' +
@@ -555,11 +620,11 @@ SW.App = SW.App || {};
         '</div>' +
         '<div class="expense-sub">' +
         esc(formatDateDisplay(expense.date)) +
-        ' · Settlement</div></div>' +
+        ' · ' + esc(t('expense.settlementSuffix')) + '</div></div>' +
         '<div class="expense-row-actions">' +
         '<button type="button" class="icon-btn expense-delete-btn" data-id="' +
         esc(expense.id) +
-        '" aria-label="Delete settlement">🗑️</button>' +
+        '" aria-label="' + esc(t('expense.deleteSettlementAria')) + '">🗑️</button>' +
         '</div>' +
         '</div>' +
         '</li>'
@@ -575,7 +640,7 @@ SW.App = SW.App || {};
     var icon = CATEGORY_ICONS[expense.category] || CATEGORY_ICONS.general;
     var currentUserId = lastState && lastState.ui ? lastState.ui.currentUserId : null;
 
-    var shareText = 'Not involved';
+    var shareText = t('expense.notInvolved');
     var shareClass = '';
     var involved = currentUserId != null && (shareByMember.hasOwnProperty(currentUserId) || expense.paidBy === currentUserId);
     if (involved) {
@@ -583,13 +648,13 @@ SW.App = SW.App || {};
       var owedPart = shareByMember[currentUserId] || 0;
       var net = paidPart - owedPart;
       if (net > 0) {
-        shareText = 'You lent ' + SW.Model.formatMoney(net, group.currency);
+        shareText = t('expense.youLent', { amount: fmtMoney(net, group.currency) });
         shareClass = 'positive';
       } else if (net < 0) {
-        shareText = 'You owe ' + SW.Model.formatMoney(-net, group.currency);
+        shareText = t('expense.youOwe', { amount: fmtMoney(-net, group.currency) });
         shareClass = 'negative';
       } else {
-        shareText = 'Settled';
+        shareText = t('expense.settled');
       }
     }
 
@@ -610,16 +675,14 @@ SW.App = SW.App || {};
       esc(expense.description) +
       '</div>' +
       '<div class="expense-sub">' +
-      esc(memberName(expense.paidBy)) +
-      ' paid ' +
-      esc(SW.Model.formatMoney(expense.amountCents, group.currency)) +
+      esc(t('expense.paidLine', { payer: memberName(expense.paidBy), amount: fmtMoney(expense.amountCents, group.currency) })) +
       ' · ' +
       esc(formatDateDisplay(expense.date)) +
       '</div>' +
       '</div>' +
       '<div class="expense-amounts">' +
       '<div class="expense-amount">' +
-      esc(SW.Model.formatMoney(expense.amountCents, group.currency)) +
+      esc(fmtMoney(expense.amountCents, group.currency)) +
       '</div>' +
       '<div class="expense-share ' +
       shareClass +
@@ -630,10 +693,10 @@ SW.App = SW.App || {};
       '<div class="expense-row-actions">' +
       '<button type="button" class="icon-btn expense-edit-btn" data-id="' +
       esc(expense.id) +
-      '" aria-label="Edit expense">✏️</button>' +
+      '" aria-label="' + esc(t('expense.editAria')) + '">✏️</button>' +
       '<button type="button" class="icon-btn expense-delete-btn" data-id="' +
       esc(expense.id) +
-      '" aria-label="Delete expense">🗑️</button>' +
+      '" aria-label="' + esc(t('expense.deleteAria')) + '">🗑️</button>' +
       '</div>' +
       '</div>' +
       detail +
@@ -648,17 +711,18 @@ SW.App = SW.App || {};
           '<div class="expense-detail-row"><span>' +
           esc(memberName(s.memberId)) +
           '</span><span>' +
-          esc(SW.Model.formatMoney(s.shareCents, lastState && getCurrentGroup(lastState) ? getCurrentGroup(lastState).currency : 'EUR')) +
+          esc(fmtMoney(s.shareCents, lastState && getCurrentGroup(lastState) ? getCurrentGroup(lastState).currency : 'EUR')) +
           '</span></div>'
         );
       })
       .join('');
     var note = expense.note ? '<div class="note">' + esc(expense.note) + '</div>' : '';
+    var modeLabel = t('splitMode.' + expense.splitMode) || expense.splitMode;
     return (
       '<div class="expense-detail">' +
-      '<div class="expense-detail-row"><strong>Split (' +
-      esc(expense.splitMode) +
-      ')</strong><span></span></div>' +
+      '<div class="expense-detail-row"><strong>' +
+      esc(t('expense.splitHeading', { mode: modeLabel })) +
+      '</strong><span></span></div>' +
       rows +
       note +
       '</div>'
@@ -683,11 +747,11 @@ SW.App = SW.App || {};
     if (renameBtn) {
       renameBtn.addEventListener('click', function () {
         openPrompt({
-          title: 'Rename group', label: 'Group name', submitLabel: 'Rename',
+          title: t('group.rename'), label: t('group.nameLabel'), submitLabel: t('group.renameSubmit'),
           value: group.name
         }, function (name) {
           var result = store().dispatch({ type: 'RENAME_GROUP', payload: { groupId: group.id, name: name } });
-          showToast(result && result.ok ? 'Group renamed' : (result && result.error) || 'Could not rename group.');
+          showToast(result && result.ok ? t('group.renamed') : (result && result.error) || t('group.renameFailed'));
         });
       });
     }
@@ -700,22 +764,24 @@ SW.App = SW.App || {};
         }).length;
         var shared = group.members.length > 1;
         openConfirm({
-          title: 'Delete this group?',
-          confirmLabel: 'Delete group',
+          title: t('group.deleteTitle'),
+          confirmLabel: t('group.delete'),
           // Spelling out the blast radius, because this destroys other
           // people's records too, not just yours.
           bodyHtml:
-            '<strong>' + esc(group.name) + '</strong> and its ' + count +
-            ' expense' + (count === 1 ? '' : 's') + ' will be permanently deleted.' +
+            t('group.deleteBody.main', {
+              name: '<strong>' + esc(group.name) + '</strong>',
+              count: count,
+              expenseWord: unit(count, 'unit.expense')
+            }) +
             (shared
-              ? ' This removes them for all ' + group.members.length +
-                ' members, not just you.'
+              ? t('group.deleteBody.sharedSuffix', { count: group.members.length, memberWord: unit(group.members.length, 'unit.member') })
               : '') +
-            ' This cannot be undone.',
+            t('group.deleteBody.cannotUndo'),
           requireText: group.name
         }, function () {
           var result = store().dispatch({ type: 'DELETE_GROUP', payload: { groupId: group.id } });
-          showToast(result && result.ok ? 'Group deleted' : (result && result.error) || 'Could not delete group.');
+          showToast(result && result.ok ? t('group.deleted') : (result && result.error) || t('group.deleteFailed'));
           if (result && result.ok && SW.Router) SW.Router.replaceRoot();
         });
       });
@@ -734,12 +800,12 @@ SW.App = SW.App || {};
     if (addMemberBtn) {
       addMemberBtn.addEventListener('click', function () {
         openPrompt({
-          title: 'Add a member', label: 'Name', submitLabel: 'Add',
-          placeholder: 'e.g. Mara',
-          hint: 'Demo mode only — with an account, people join with an invite code.'
+          title: t('group.addMemberTitle'), label: t('common.name'), submitLabel: t('common.add'),
+          placeholder: t('group.addMemberPlaceholder'),
+          hint: t('group.addMemberHint')
         }, function (name) {
           var result = store().dispatch({ type: 'ADD_MEMBER', payload: { groupId: group.id, name: name } });
-          showToast(result && result.ok ? 'Member added' : (result && result.error) || 'Could not add member.');
+          showToast(result && result.ok ? t('group.memberAdded') : (result && result.error) || t('group.memberAddFailed'));
         });
       });
     }
@@ -753,7 +819,7 @@ SW.App = SW.App || {};
           type: 'REMOVE_MEMBER',
           payload: { groupId: group.id, memberId: memberId, userId: memberId }
         });
-        showToast(result && result.ok ? 'Member removed' : (result && result.error) || 'Cannot remove: member appears in an expense.');
+        showToast(result && result.ok ? t('group.memberRemoved') : (result && result.error) || t('group.memberRemoveFailed'));
       });
     });
 
@@ -769,7 +835,7 @@ SW.App = SW.App || {};
           type: 'ADD_SETTLEMENT',
           payload: { groupId: group.id, from: s.from, to: s.to, amountCents: s.amountCents, date: todayISO() }
         });
-        showToast(result && result.ok ? 'Settlement recorded' : (result && result.error) || 'Could not record settlement.');
+        showToast(result && result.ok ? t('settle.recorded') : (result && result.error) || t('settle.recordFailed'));
       });
     });
 
@@ -811,11 +877,11 @@ SW.App = SW.App || {};
 
     var result = store().dispatch({ type: 'DELETE_EXPENSE', payload: { expenseId: expenseId } });
     if (!result || !result.ok) {
-      showToast((result && result.error) || 'Could not delete.');
+      showToast((result && result.error) || t('expense.deleteFailed'));
       return;
     }
 
-    showToast(expense.type === 'settlement' ? 'Settlement deleted' : 'Expense deleted', {
+    showToast(expense.type === 'settlement' ? t('expense.settlementDeletedToast') : t('expense.deletedToast'), {
       undo: function () {
         var restored;
         if (expense.type === 'settlement') {
@@ -850,9 +916,9 @@ SW.App = SW.App || {};
         // expense was removed between the delete and the undo. Saying
         // "Restored" regardless would be a lie.
         if (restored && restored.ok) {
-          showToast('Restored');
+          showToast(t('expense.restored'));
         } else {
-          showToast((restored && restored.error) || 'Could not restore.');
+          showToast((restored && restored.error) || t('expense.restoreFailed'));
         }
       }
     });
@@ -890,7 +956,8 @@ SW.App = SW.App || {};
         var valueInput = '';
         if (mode !== 'equal') {
           var raw = ui.participantValues[m.id] != null ? ui.participantValues[m.id] : '';
-          var placeholder = mode === 'percent' ? '%' : mode === 'shares' ? 'shares' : '0.00';
+          var placeholder = mode === 'percent' ? '%' : mode === 'shares' ? t('splitMode.shares') : t('amount.placeholder');
+          var modeLabel = t('splitMode.' + mode);
           valueInput =
             '<input type="text" inputmode="decimal" class="value-input" data-member="' +
             esc(m.id) +
@@ -901,10 +968,8 @@ SW.App = SW.App || {};
             '" ' +
             (checked ? '' : 'disabled') +
             ' aria-label="' +
-            esc(m.name) +
-            ' ' +
-            esc(mode) +
-            ' value" />';
+            esc(t('expense.participantValueAria', { name: m.name, mode: modeLabel })) +
+            '" />';
         }
         return (
           '<div class="participant-row">' +
@@ -950,13 +1015,13 @@ SW.App = SW.App || {};
     var submitBtn = qs('#expenseSubmitBtn');
 
     if (amountCents === null) {
-      previewEl.innerHTML = '<em>Enter a valid amount to see the split preview.</em>';
+      previewEl.innerHTML = '<em>' + esc(t('expense.previewNeedAmount')) + '</em>';
       errorEl.textContent = '';
       submitBtn.disabled = true;
       return;
     }
     if (participants.length === 0) {
-      previewEl.innerHTML = '<em>Select at least one participant.</em>';
+      previewEl.innerHTML = '<em>' + esc(t('expense.previewNeedParticipant')) + '</em>';
       errorEl.textContent = '';
       submitBtn.disabled = true;
       return;
@@ -980,18 +1045,20 @@ SW.App = SW.App || {};
       group.members.forEach(function (m) { byId[m.id] = m.name; });
       var items = split.shares
         .map(function (s) {
-          return '<li>' + esc(byId[s.memberId] || '?') + ': ' + esc(SW.Model.formatMoney(s.shareCents, group.currency)) + '</li>';
+          return '<li>' + esc(byId[s.memberId] || '?') + ': ' + esc(fmtMoney(s.shareCents, group.currency)) + '</li>';
         })
         .join('');
-      previewEl.innerHTML = '<strong>Split preview</strong><ul>' + items + '</ul>';
+      previewEl.innerHTML = '<strong>' + esc(t('expense.previewHeading')) + '</strong><ul>' + items + '</ul>';
     } else {
-      previewEl.innerHTML = '<em>' + esc(split.error || 'Unable to compute split.') + '</em>';
+      // split.error comes from js/model.js, which we don't own and which
+      // only speaks English - shown as-is if present, our own fallback if not.
+      previewEl.innerHTML = '<em>' + esc(split.error || t('expense.splitError')) + '</em>';
     }
 
     if (!validation.ok) {
       errorEl.textContent = validation.errors.join(' · ');
     } else if (!split.ok) {
-      errorEl.textContent = split.error || 'Unable to compute split.';
+      errorEl.textContent = split.error || t('expense.splitError');
     } else {
       errorEl.textContent = '';
     }
@@ -1021,8 +1088,8 @@ SW.App = SW.App || {};
       });
     }
 
-    qs('#expenseModalTitle').textContent = expense ? 'Edit expense' : 'Add expense';
-    qs('#expenseSubmitBtn').textContent = expense ? 'Save changes' : 'Save expense';
+    qs('#expenseModalTitle').textContent = expense ? t('expense.editTitle') : t('expense.addTitle');
+    qs('#expenseSubmitBtn').textContent = expense ? t('expense.saveChangesSubmit') : t('expense.saveSubmit');
     qs('#expenseIdInput').value = expense ? expense.id : '';
     qs('#expenseDescInput').value = expense ? expense.description : '';
     qs('#expenseAmountInput').value = expense ? (expense.amountCents / 100).toFixed(2) : '';
@@ -1043,10 +1110,10 @@ SW.App = SW.App || {};
         : group.members[0].id;
     payerSelect.value = expense ? expense.paidBy : fallbackPayer;
 
-    qsa('.split-tab', qs('#splitTabs')).forEach(function (t) {
-      var active = t.getAttribute('data-mode') === ui.splitMode;
-      t.classList.toggle('active', active);
-      t.setAttribute('aria-selected', active ? 'true' : 'false');
+    qsa('.split-tab', qs('#splitTabs')).forEach(function (tabEl) {
+      var active = tabEl.getAttribute('data-mode') === ui.splitMode;
+      tabEl.classList.toggle('active', active);
+      tabEl.setAttribute('aria-selected', active ? 'true' : 'false');
     });
 
     renderParticipantsList(group);
@@ -1105,10 +1172,10 @@ SW.App = SW.App || {};
       tab.addEventListener('click', function () {
         if (!currentGroupForModal) return;
         ui.splitMode = tab.getAttribute('data-mode');
-        qsa('.split-tab', qs('#splitTabs')).forEach(function (t) {
-          var active = t === tab;
-          t.classList.toggle('active', active);
-          t.setAttribute('aria-selected', active ? 'true' : 'false');
+        qsa('.split-tab', qs('#splitTabs')).forEach(function (tabEl) {
+          var active = tabEl === tab;
+          tabEl.classList.toggle('active', active);
+          tabEl.setAttribute('aria-selected', active ? 'true' : 'false');
         });
         if (ui.splitMode === 'shares') {
           Object.keys(ui.selectedParticipants).forEach(function (id) {
@@ -1158,12 +1225,12 @@ SW.App = SW.App || {};
       }
 
       if (!result || !result.ok) {
-        qs('#expenseFormError').textContent = (result && result.error) || 'Could not save expense.';
+        qs('#expenseFormError').textContent = (result && result.error) || t('expense.saveFailed');
         return;
       }
 
       closeModal(qs('#expenseModalOverlay'));
-      showToast(ui.editingExpenseId ? 'Expense updated' : 'Expense added');
+      showToast(ui.editingExpenseId ? t('expense.updatedToast') : t('expense.addedToast'));
     });
 
     qs('#settleForm').addEventListener('submit', function (e) {
@@ -1178,11 +1245,11 @@ SW.App = SW.App || {};
       var errorEl = qs('#settleFormError');
 
       if (amountCents === null || amountCents <= 0) {
-        errorEl.textContent = 'Enter a valid amount.';
+        errorEl.textContent = t('settle.amountInvalid');
         return;
       }
       if (from === to) {
-        errorEl.textContent = '"From" and "To" must be different members.';
+        errorEl.textContent = t('settle.sameMember');
         return;
       }
 
@@ -1191,11 +1258,11 @@ SW.App = SW.App || {};
         payload: { groupId: group.id, from: from, to: to, amountCents: amountCents, date: date }
       });
       if (!result || !result.ok) {
-        errorEl.textContent = (result && result.error) || 'Could not record settlement.';
+        errorEl.textContent = (result && result.error) || t('settle.recordFailed');
         return;
       }
       closeModal(qs('#settleModalOverlay'));
-      showToast('Settlement recorded');
+      showToast(t('settle.recorded'));
     });
 
     qs('#newGroupBtn').addEventListener('click', function () {
@@ -1221,7 +1288,7 @@ SW.App = SW.App || {};
       var errorEl = qs('#groupFormError');
 
       if (!name) {
-        errorEl.textContent = 'Group name is required.';
+        errorEl.textContent = t('group.nameRequired');
         return;
       }
 
@@ -1230,15 +1297,15 @@ SW.App = SW.App || {};
       var payload = isRemote()
         ? { name: name, currency: currency }
         : { name: name, currency: currency, memberNames: memberNames };
-      var release = guardSubmit(qs('#groupForm'), 'Creating…');
+      var release = guardSubmit(qs('#groupForm'), t('group.creating'));
       var result = store().dispatch({ type: 'ADD_GROUP', payload: payload });
       if (release) release();
       if (!result || !result.ok) {
-        errorEl.textContent = (result && result.error) || 'Could not create group.';
+        errorEl.textContent = (result && result.error) || t('group.createFailed');
         return;
       }
       closeModal(qs('#groupModalOverlay'));
-      showToast('Group created');
+      showToast(t('group.created'));
     });
 
     qs('#currentUserSelect').addEventListener('change', function (e) {
@@ -1279,7 +1346,7 @@ SW.App = SW.App || {};
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       closeDataMenu();
-      showToast('Exported data');
+      showToast(t('data.exported'));
     });
 
     qs('#importBtn').addEventListener('click', function () {
@@ -1292,16 +1359,16 @@ SW.App = SW.App || {};
       var reader = new FileReader();
       reader.onload = function () {
         if (isRemote()) {
-          showToast('Importing a file is only available in demo mode.');
+          showToast(t('data.importRemoteBlocked'));
           e.target.value = '';
           return;
         }
         var result = store().importJSON(String(reader.result));
-        showToast(result && result.ok ? 'Data imported' : (result && result.error) || 'Import failed: invalid file.');
+        showToast(result && result.ok ? t('data.imported') : (result && result.error) || t('data.importFailed'));
         e.target.value = '';
       };
       reader.onerror = function () {
-        showToast('Could not read file.');
+        showToast(t('data.readFailed'));
         e.target.value = '';
       };
       reader.readAsText(file);
@@ -1313,31 +1380,31 @@ SW.App = SW.App || {};
       // yours alone, and reset() only clears the local cache anyway, so it
       // would look destructive while changing nothing for anyone else.
       if (isRemote()) {
-        showToast('Reset is only available in demo mode. Delete a group instead.');
+        showToast(t('data.resetRemoteBlocked'));
         closeDataMenu();
         return;
       }
       closeDataMenu();
       openConfirm({
-        title: 'Reset all data?',
-        confirmLabel: 'Reset everything',
-        body: 'This deletes every group and expense stored in this browser. It cannot be undone.',
-        requireText: 'RESET'
+        title: t('data.resetTitle'),
+        confirmLabel: t('data.resetSubmit'),
+        body: t('data.resetBody'),
+        requireText: t('data.resetConfirmWord')
       }, function () {
         store().reset();
-        showToast('All data reset');
+        showToast(t('data.resetDone'));
       });
     });
 
     qs('#demoBtn').addEventListener('click', function () {
       if (isRemote()) {
-        showToast('Demo data is only available in demo mode.');
+        showToast(t('data.demoRemoteBlocked'));
         closeDataMenu();
         return;
       }
       store().seedDemo();
       closeDataMenu();
-      showToast('Demo data loaded');
+      showToast(t('data.demoLoaded'));
     });
 
     // Keyboard shortcuts: "n" opens add-expense, "Esc" closes modals / menus.
@@ -1391,7 +1458,7 @@ SW.App = SW.App || {};
     var avatar = qs('#accountAvatar');
     var initials = qs('#accountInitials');
     var nameEl = qs('#accountName');
-    var name = user.name || user.email || 'Signed in';
+    var name = user.name || user.email || t('auth.signedInFallback');
 
     if (nameEl) nameEl.textContent = name;
 
@@ -1415,7 +1482,7 @@ SW.App = SW.App || {};
     if (!btn || btn.disabled) return null;
     var original = btn.textContent;
     btn.disabled = true;
-    btn.textContent = pendingLabel || 'Saving…';
+    btn.textContent = pendingLabel || t('sync.saving');
     return function release() {
       btn.disabled = false;
       btn.textContent = original;
@@ -1428,9 +1495,9 @@ SW.App = SW.App || {};
   // get the focus trap and Escape handling for free.
   function openPrompt(opts, onSubmit) {
     var overlay = qs('#promptModal');
-    qs('#promptTitle').textContent = opts.title || 'Edit';
-    qs('#promptLabel').textContent = opts.label || 'Value';
-    qs('#promptSubmitBtn').textContent = opts.submitLabel || 'Save';
+    qs('#promptTitle').textContent = opts.title || t('common.edit');
+    qs('#promptLabel').textContent = opts.label || t('common.value');
+    qs('#promptSubmitBtn').textContent = opts.submitLabel || t('common.save');
     qs('#promptHint').textContent = opts.hint || '';
     qs('#promptHint').hidden = !opts.hint;
     qs('#promptError').textContent = '';
@@ -1449,16 +1516,16 @@ SW.App = SW.App || {};
   // things that destroy other people's data as well as your own.
   function openConfirm(opts, onConfirm) {
     var overlay = qs('#confirmModal');
-    qs('#confirmTitle').textContent = opts.title || 'Are you sure?';
+    qs('#confirmTitle').textContent = opts.title || t('common.areYouSure');
     qs('#confirmBody').innerHTML = opts.bodyHtml || esc(opts.body || '');
-    qs('#confirmOkBtn').textContent = opts.confirmLabel || 'Delete';
+    qs('#confirmOkBtn').textContent = opts.confirmLabel || t('common.delete');
     qs('#confirmError').textContent = '';
     var row = qs('#confirmTypeRow');
     var input = qs('#confirmTypeInput');
     input.value = '';
     row.hidden = !opts.requireText;
     if (opts.requireText) {
-      qs('#confirmTypeLabel').textContent = 'Type "' + opts.requireText + '" to confirm';
+      qs('#confirmTypeLabel').textContent = t('confirm.typeToConfirmLabel', { text: opts.requireText });
     }
     confirmHandler = onConfirm;
     confirmRequiredText = opts.requireText || null;
@@ -1476,7 +1543,7 @@ SW.App = SW.App || {};
       e.preventDefault();
       var value = qs('#promptInput').value.trim();
       if (!value) {
-        qs('#promptError').textContent = 'Please enter a value.';
+        qs('#promptError').textContent = t('prompt.needValue');
         return;
       }
       var fn = promptHandler;
@@ -1489,7 +1556,7 @@ SW.App = SW.App || {};
       if (confirmRequiredText) {
         var typed = qs('#confirmTypeInput').value.trim();
         if (typed !== confirmRequiredText) {
-          qs('#confirmError').textContent = 'That does not match. Type it exactly to confirm.';
+          qs('#confirmError').textContent = t('confirm.mismatch');
           return;
         }
       }
@@ -1521,8 +1588,10 @@ SW.App = SW.App || {};
 
   // ---- "Saving… / Saved / Offline" indicator ------------------------------
   var syncStatusTimer = null;
+  var lastSyncStatus = null; // remembered so a language switch can redraw it
 
   function setSyncStatus(status) {
+    lastSyncStatus = status;
     var el = qs('#syncStatus');
     if (!el) return;
     clearTimeout(syncStatusTimer);
@@ -1536,17 +1605,17 @@ SW.App = SW.App || {};
     el.hidden = false;
 
     if (status.state === 'saving') {
-      el.textContent = 'Saving…';
+      el.textContent = t('sync.saving');
     } else if (status.state === 'saved') {
-      el.textContent = 'Saved';
+      el.textContent = t('sync.saved');
       // A success means whatever failed before is no longer the current
       // state of the world, so the banner can go.
       clearErrorBanner();
       // "Saved" is reassurance, not information - let it fade out.
       syncStatusTimer = setTimeout(function () { el.hidden = true; }, 1500);
     } else {
-      el.textContent = 'Not saved';
-      showErrorBanner(status.message || 'A change could not be saved. It is not stored.');
+      el.textContent = t('sync.notSaved');
+      showErrorBanner(status.message || t('sync.errorBannerDefault'));
     }
   }
 
@@ -1576,11 +1645,12 @@ SW.App = SW.App || {};
       return;
     }
     var expenseCount = local.expenses ? local.expenses.length : 0;
-    warn.textContent =
-      'You have ' + local.groups.length + ' group' + (local.groups.length === 1 ? '' : 's') +
-      ' and ' + expenseCount + ' expense' + (expenseCount === 1 ? '' : 's') +
-      ' saved in this browser from demo mode. Creating an account starts a fresh, shared set of books — ' +
-      'this demo data stays here and will not move across.';
+    warn.textContent = t('auth.demoDataWarning', {
+      groups: local.groups.length,
+      groupWord: unit(local.groups.length, 'unit.group'),
+      expenses: expenseCount,
+      expenseWord: unit(expenseCount, 'unit.expense')
+    });
     warn.hidden = false;
   }
 
@@ -1633,7 +1703,7 @@ SW.App = SW.App || {};
       .catch(function (err) {
         setSyncStatus({
           state: 'error',
-          message: 'Could not load your groups: ' + ((err && err.message) || 'unknown error')
+          message: t('sync.loadGroupsFailedPrefix') + ((err && err.message) || t('sync.unknownError'))
         });
       });
   }
@@ -1655,7 +1725,7 @@ SW.App = SW.App || {};
       if (!res || !res.ok) {
         // The link points at a group this account cannot see. Say so rather
         // than silently showing them somebody else's group.
-        showToast('That group link is not available on this account.');
+        showToast(t('auth.groupLinkUnavailable'));
         if (SW.Router) SW.Router.replaceRoot();
       }
       pendingGroupFromUrl = null;
@@ -1677,14 +1747,20 @@ SW.App = SW.App || {};
 
       if (error) error.textContent = '';
       if (nameRow) nameRow.hidden = mode !== 'signup';
-      if (submit) submit.textContent = mode === 'signup' ? 'Create account' : 'Sign in';
-      if (prompt) prompt.textContent = mode === 'signup' ? 'Already have an account?' : 'No account yet?';
-      if (switchBtn) switchBtn.textContent = mode === 'signup' ? 'Sign in' : 'Create one';
+      if (submit) submit.textContent = mode === 'signup' ? t('auth.createAccount') : t('auth.signIn');
+      if (prompt) prompt.textContent = mode === 'signup' ? t('auth.alreadyHaveAccount') : t('auth.noAccountYet');
+      if (switchBtn) switchBtn.textContent = mode === 'signup' ? t('auth.signIn') : t('auth.createOne');
       // Tells a password manager whether to offer a saved password or a new one.
       if (password) {
         password.setAttribute('autocomplete', mode === 'signup' ? 'new-password' : 'current-password');
       }
     }
+
+    // Re-apply the current mode's text when the language changes, so a
+    // switch mid-form doesn't leave stale English/German text behind.
+    SW.I18n.onChange(function () {
+      setAuthMode(authMode);
+    });
 
     var switchBtn = qs('#authSwitchBtn');
     if (switchBtn) {
@@ -1708,15 +1784,15 @@ SW.App = SW.App || {};
         if (errorEl) errorEl.textContent = '';
 
         if (!email.trim()) {
-          if (errorEl) errorEl.textContent = 'Enter your email address.';
+          if (errorEl) errorEl.textContent = t('auth.enterEmail');
           return;
         }
         if (password.length < 8) {
-          if (errorEl) errorEl.textContent = 'Password must be at least 8 characters.';
+          if (errorEl) errorEl.textContent = t('auth.passwordTooShort');
           return;
         }
         if (authMode === 'signup' && !name.trim()) {
-          if (errorEl) errorEl.textContent = 'Enter the name your friends will see.';
+          if (errorEl) errorEl.textContent = t('auth.enterName');
           return;
         }
 
@@ -1733,7 +1809,7 @@ SW.App = SW.App || {};
             return;
           }
           if (errorEl) {
-            errorEl.textContent = (result && result.error) || 'Could not sign in.';
+            errorEl.textContent = (result && result.error) || t('auth.signInFailed');
           }
           // Account made but not yet usable: put them on the sign-in tab.
           if (result && result.needsConfirmation) setAuthMode('signin');
@@ -1761,7 +1837,7 @@ SW.App = SW.App || {};
             showAuthScreen();
           })
           .catch(function (err) {
-            showToast('Could not sign out: ' + ((err && err.message) || 'unknown error'));
+            showToast(t('auth.signOutFailedPrefix') + ((err && err.message) || t('sync.unknownError')));
           });
       });
     }
@@ -1771,7 +1847,7 @@ SW.App = SW.App || {};
     if (joinBtn) {
       joinBtn.addEventListener('click', function () {
         if (!isRemote()) {
-          showToast('Sign in to join a friend\'s group.');
+          showToast(t('join.signInFirst'));
           return;
         }
         var err = qs('#joinError');
@@ -1791,7 +1867,7 @@ SW.App = SW.App || {};
         var errorEl = qs('#joinError');
         var code = input ? input.value.trim() : '';
         if (!code) {
-          if (errorEl) errorEl.textContent = 'Enter the invite code your friend sent you.';
+          if (errorEl) errorEl.textContent = t('join.codeRequired');
           return;
         }
         // Joining needs a round trip - the code has to be checked against
@@ -1801,7 +1877,7 @@ SW.App = SW.App || {};
         var originalLabel = submitBtn ? submitBtn.textContent : '';
         if (submitBtn) {
           submitBtn.disabled = true;
-          submitBtn.textContent = 'Joining…';
+          submitBtn.textContent = t('join.submitting');
         }
 
         function finished(outcome) {
@@ -1811,11 +1887,11 @@ SW.App = SW.App || {};
           }
           if (outcome && outcome.ok) {
             closeModal(qs('#joinModal'));
-            showToast('Joined the group');
+            showToast(t('join.joined'));
             // Consume the invite link so refreshing does not reopen the dialog.
             if (SW.Router) SW.Router.replaceRoot();
           } else if (errorEl) {
-            errorEl.textContent = (outcome && outcome.error) || 'Could not join that group.';
+            errorEl.textContent = (outcome && outcome.error) || t('join.failed');
           }
         }
 
@@ -1827,7 +1903,7 @@ SW.App = SW.App || {};
         // A store that rejects the action outright (offline mode, or a
         // malformed code) answers immediately and never calls back.
         if (!result || !result.ok) {
-          finished({ ok: false, error: (result && result.error) || 'Could not join that group.' });
+          finished({ ok: false, error: (result && result.error) || t('join.failed') });
         }
       });
     }
@@ -1837,14 +1913,14 @@ SW.App = SW.App || {};
     if (copyBtn) {
       copyBtn.addEventListener('click', function () {
         var codeEl = qs('#inviteCodeText');
-        copyText(codeEl ? codeEl.textContent.trim() : '', 'Invite code copied');
+        copyText(codeEl ? codeEl.textContent.trim() : '', t('invite.codeCopied'));
       });
     }
 
     var copyLinkBtn = qs('#copyInviteLinkBtn');
     if (copyLinkBtn) {
       copyLinkBtn.addEventListener('click', function () {
-        copyText(inviteLinkForCurrentGroup, 'Invite link copied — send it to your friend');
+        copyText(inviteLinkForCurrentGroup, t('invite.linkCopied'));
       });
     }
   }
@@ -1853,7 +1929,7 @@ SW.App = SW.App || {};
 
   function openInviteModal(group) {
     var codeEl = qs('#inviteCodeText');
-    if (codeEl) codeEl.textContent = group.inviteCode || '(no code)';
+    if (codeEl) codeEl.textContent = group.inviteCode || t('invite.noCode');
     // A link is one tap for the person receiving it; a bare code is a
     // copy-paste and an explanation.
     inviteLinkForCurrentGroup = (SW.Router && group.inviteCode)
@@ -1869,10 +1945,10 @@ SW.App = SW.App || {};
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(
         function () { showToast(okMessage); },
-        function () { showToast('Could not copy — select it and copy manually.'); }
+        function () { showToast(t('invite.copyFailed')); }
       );
     } else {
-      showToast('Copy manually: ' + text);
+      showToast(t('invite.copyManually', { text: text }));
     }
   }
 
@@ -1880,6 +1956,17 @@ SW.App = SW.App || {};
     wireStaticEvents();
     wireAuthEvents();
     wireDialogs();
+
+    // SW.I18n.applyStatic() already re-translates the [data-i18n] markup by
+    // itself on every language switch. Everything this file builds from a
+    // template string (the header, sidebar, group view...) does not go
+    // through that - it has to be redrawn from state instead. The sync
+    // status pill isn't part of state at all, so it gets its own refresh.
+    SW.I18n.onChange(function () {
+      if (lastState) render(lastState);
+      if (lastSyncStatus) setSyncStatus(lastSyncStatus);
+      warnAboutStrandedDemoData();
+    });
 
     // Deep links: ?g=<id> opens a group, ?join=<code> lands a friend on the
     // join step with the code already filled in. Before this there was no way
@@ -1926,7 +2013,7 @@ SW.App = SW.App || {};
       .catch(function () {
         // If the backend cannot even be reached, the app is still useful
         // offline - better that than a blank page.
-        showToast('Could not reach the server — starting in demo mode.');
+        showToast(t('sync.serverUnreachable'));
         startLocalMode();
       });
   }
