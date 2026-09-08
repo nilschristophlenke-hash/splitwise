@@ -133,6 +133,37 @@
         <button type="button" class="link-btn" id="authSwitchBtn" data-i18n="auth.createOne">Create one</button>
       </p>
 
+      <p class="auth-switch">
+        <button type="button" class="link-btn" id="authForgotBtn" data-i18n="auth.forgot">Forgot your password?</button>
+      </p>
+
+      <!-- Ask for a reset link. Replaces the sign-in form while open. -->
+      <form id="resetRequestForm" hidden>
+        <div class="form-row">
+          <label for="resetEmailInput" data-i18n="auth.emailLabel">Email</label>
+          <input type="email" id="resetEmailInput" autocomplete="email" required
+                 placeholder="you@example.com" />
+        </div>
+        <p class="form-error" id="resetRequestError" role="alert"></p>
+        <p class="hint" id="resetRequestHint" hidden data-i18n="auth.resetSent">If that address has an account, a reset link is on its way. Check your spam folder, delivery can be slow.</p>
+        <button type="submit" class="btn btn-primary btn-block" id="resetRequestSubmitBtn"
+                data-i18n="auth.sendResetLink">Send reset link</button>
+        <p class="auth-switch">
+          <button type="button" class="link-btn" id="resetRequestBackBtn" data-i18n="auth.backToSignIn">Back to sign in</button>
+        </p>
+      </form>
+
+      <!-- Shown when arriving back from a reset email. -->
+      <form id="newPasswordForm" hidden>
+        <div class="form-row">
+          <label for="newPasswordInput" data-i18n="auth.newPasswordLabel">New password</label>
+          <input type="password" id="newPasswordInput" required minlength="8" autocomplete="new-password" />
+        </div>
+        <p class="form-error" id="newPasswordError" role="alert"></p>
+        <button type="submit" class="btn btn-primary btn-block" id="newPasswordSubmitBtn"
+                data-i18n="auth.setNewPassword">Set new password</button>
+      </form>
+
       <p class="auth-warning" id="demoDataWarning" hidden></p>
 
       <button type="button" class="link-btn auth-demo-btn" id="tryDemoBtn" data-i18n="auth.tryDemo">Try the demo without an account</button>

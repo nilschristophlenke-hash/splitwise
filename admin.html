@@ -59,7 +59,10 @@
 
     <div class="admin-body">
       <nav class="admin-sidebar" aria-label="Admin sections">
-        <button type="button" class="nav-btn active" data-section="overview" aria-current="page">
+        <button type="button" class="nav-btn active" data-section="journey" aria-current="page">
+          Journey
+        </button>
+        <button type="button" class="nav-btn" data-section="overview">
           Overview
         </button>
         <button type="button" class="nav-btn" data-section="workflows">
@@ -81,7 +84,15 @@
 
       <main class="admin-main">
 
-        <section id="section-overview" class="admin-section">
+        <section id="section-journey" class="admin-section">
+          <div class="section-header">
+            <h2>Journey</h2>
+            <p class="section-desc">The one path every group travels, from creation to everyone settled up — with every branch and every honestly-admitted gap.</p>
+          </div>
+          <div class="section-body"><!-- rendered by js/admin.js --></div>
+        </section>
+
+        <section id="section-overview" class="admin-section" hidden>
           <div class="section-header">
             <h2>Overview</h2>
             <p class="section-desc">How the app is layered, top to bottom, and the principles that hold it together.</p>

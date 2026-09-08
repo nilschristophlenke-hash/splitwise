@@ -1762,6 +1762,94 @@ SW.App = SW.App || {};
       setAuthMode(authMode);
     });
 
+    // ---- password reset -------------------------------------------------
+    // Without this a friend who forgets their password is locked out for
+    // good: there is no other recovery path in the app.
+    function showAuthPane(which) {
+      var panes = { signin: '#authForm', reset: '#resetRequestForm', newpw: '#newPasswordForm' };
+      Object.keys(panes).forEach(function (k) {
+        var el = qs(panes[k]);
+        if (el) el.hidden = k !== which;
+      });
+      // The mode toggle and the forgot link only make sense on the sign-in pane.
+      ['#authSwitchPrompt', '#authSwitchBtn', '#authForgotBtn'].forEach(function (sel) {
+        var el = qs(sel);
+        if (el && el.parentElement) el.parentElement.hidden = which !== 'signin';
+      });
+    }
+
+    var forgotBtn = qs('#authForgotBtn');
+    if (forgotBtn) {
+      forgotBtn.addEventListener('click', function () {
+        var err = qs('#resetRequestError');
+        var hint = qs('#resetRequestHint');
+        if (err) err.textContent = '';
+        if (hint) hint.hidden = true;
+        var email = (qs('#authEmailInput') || {}).value || '';
+        var target = qs('#resetEmailInput');
+        if (target) target.value = email;
+        showAuthPane('reset');
+        if (target) target.focus();
+      });
+    }
+
+    var backBtn = qs('#resetRequestBackBtn');
+    if (backBtn) {
+      backBtn.addEventListener('click', function () { showAuthPane('signin'); });
+    }
+
+    var resetForm = qs('#resetRequestForm');
+    if (resetForm) {
+      resetForm.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var err = qs('#resetRequestError');
+        var hint = qs('#resetRequestHint');
+        var email = (qs('#resetEmailInput') || {}).value || '';
+        if (err) err.textContent = '';
+        if (!email.trim()) {
+          if (err) err.textContent = t('auth.enterEmail');
+          return;
+        }
+        var release = guardSubmit(resetForm, t('auth.sendResetLink'));
+        SW.Auth.requestPasswordReset(email).then(function (result) {
+          if (release) release();
+          // Deliberately the same message whether or not the address exists,
+          // so this cannot be used to find out who has an account.
+          if (hint) hint.hidden = false;
+          if (!result || !result.ok) {
+            if (err) err.textContent = (result && result.error) || '';
+          }
+        });
+      });
+    }
+
+    var newPwForm = qs('#newPasswordForm');
+    if (newPwForm) {
+      newPwForm.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var err = qs('#newPasswordError');
+        var pw = (qs('#newPasswordInput') || {}).value || '';
+        if (err) err.textContent = '';
+        if (pw.length < 8) {
+          if (err) err.textContent = t('auth.passwordTooShort');
+          return;
+        }
+        var release = guardSubmit(newPwForm, t('auth.setNewPassword'));
+        SW.Auth.completePasswordReset(pw).then(function (result) {
+          if (release) release();
+          if (result && result.ok) {
+            showAuthPane('signin');
+            showToast(t('auth.passwordUpdated'));
+          } else if (err) {
+            err.textContent = (result && result.error) || '';
+          }
+        });
+      });
+    }
+
+    // Expose for the boot path, which needs to show the new-password pane.
+    SW.App.showAuthPane = showAuthPane;
+
     var switchBtn = qs('#authSwitchBtn');
     if (switchBtn) {
       switchBtn.addEventListener('click', function () {
@@ -2004,6 +2092,15 @@ SW.App = SW.App || {};
 
     SW.Auth.init()
       .then(function () {
+        // A recovery session is signed in but temporary: the only thing to
+        // do with it is set a new password, so that pane wins over the app.
+        if (SW.Auth.isPasswordRecovery()) {
+          showAuthScreen();
+          if (SW.App.showAuthPane) SW.App.showAuthPane('newpw');
+          var pw = qs('#newPasswordInput');
+          if (pw) pw.focus();
+          return;
+        }
         if (SW.Auth.isSignedIn()) {
           startRemoteMode();
         } else {

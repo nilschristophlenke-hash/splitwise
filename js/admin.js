@@ -70,6 +70,37 @@ var SW = SW || {};
     );
   }
 
+  // An elbow/curve connector used to visually tie a branch pill back to the
+  // spine node it hangs off. Purely decorative — it never needs measuring,
+  // so it stays cheap and never breaks on resize the way the ER/state-machine
+  // sketches (which DO measure box positions) could.
+  function elbowIcon() {
+    return (
+      '<svg viewBox="0 0 24 24" width="16" height="16" class="elbow-icon" aria-hidden="true">' +
+      '<path d="M4 2 V12 Q4 18 10 18 H20" fill="none" stroke="currentColor" ' +
+      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    );
+  }
+
+  // Warning triangle used to flag known-gap edge cases wherever they show up.
+  function warningIcon() {
+    return (
+      '<svg viewBox="0 0 24 24" width="14" height="14" class="warning-icon" aria-hidden="true">' +
+      '<path d="M12 3 L22 20 H2 Z" fill="none" stroke="currentColor" stroke-width="2" ' +
+      'stroke-linejoin="round"/><line x1="12" y1="9" x2="12" y2="14" stroke="currentColor" ' +
+      'stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17" r="1" fill="currentColor"/></svg>'
+    );
+  }
+
+  // Checkmark used on the journey's terminal ("everyone settled up") node.
+  function checkIcon() {
+    return (
+      '<svg viewBox="0 0 24 24" width="20" height="20" class="check-icon" aria-hidden="true">' +
+      '<path d="M4 12 L10 18 L20 6" fill="none" stroke="currentColor" stroke-width="2.5" ' +
+      'stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    );
+  }
+
   // Turn an actor name like "localStorage" or "View" into a CSS-safe,
   // predictable class suffix ("localstorage", "view").
   function actorSlug(actor) {
@@ -127,7 +158,7 @@ var SW = SW || {};
       gate.hidden = true;
       app.hidden = false;
       bootStoreOnce();
-      showSection('overview');
+      showSection('journey');
     }
 
     if (isAuthed()) {
@@ -222,6 +253,9 @@ var SW = SW || {};
   // opened rather than once up front. Cheap enough to just always re-render.
   function renderSection(target) {
     switch (target) {
+      case 'journey':
+        renderJourney();
+        break;
       case 'overview':
         renderOverview();
         break;
@@ -243,6 +277,356 @@ var SW = SW || {};
       default:
         break;
     }
+  }
+
+  // ----------------------------------------------------------------------
+  // Shared renderers for "workflow-shaped" data (steps / invariants /
+  // failure modes / edge cases). Used by the Workflows section's cards AND
+  // by the Journey section's stage detail, branch detail and cross-cutting
+  // cards, so all four places render this data identically.
+  // ----------------------------------------------------------------------
+
+  // Renders just the <li> items of a steps list (caller wraps in <ol class="flow-diagram">).
+  function stepsListHtml(steps) {
+    steps = Array.isArray(steps) ? steps : [];
+    return steps
+      .map(function (step, i) {
+        if (!step) return '';
+        var isLast = i === steps.length - 1;
+        var n = step.n !== undefined && step.n !== null ? step.n : i + 1;
+        return (
+          '<li class="flow-step">' +
+          '<div class="flow-step-marker"><span class="flow-step-n">' + esc(n) + '</span></div>' +
+          '<div class="flow-step-body">' +
+          '<div class="flow-step-top">' +
+          '<span class="actor-badge actor-' + esc(actorSlug(step.actor)) + '">' +
+          esc(step.actor || 'Unknown') +
+          '</span>' +
+          '<span class="flow-step-action">' + esc(step.action || '') + '</span>' +
+          '</div>' +
+          (step.detail ? '<div class="flow-step-detail">' + esc(step.detail) + '</div>' : '') +
+          (step.file ? '<div class="flow-step-file"><code>' + esc(step.file) + '</code></div>' : '') +
+          '</div>' +
+          (!isLast ? '<div class="flow-step-arrow">' + downArrowIcon() + '</div>' : '') +
+          '</li>'
+        );
+      })
+      .join('');
+  }
+
+  function invariantsSectionHtml(invariants) {
+    invariants = Array.isArray(invariants) ? invariants : [];
+    if (!invariants.length) return '';
+    return (
+      '<h4 class="subhead-sm">Invariants</h4><ul class="invariants-list">' +
+      invariants.map(function (inv) { return '<li>' + esc(inv) + '</li>'; }).join('') +
+      '</ul>'
+    );
+  }
+
+  function failureModesSectionHtml(failureModes) {
+    failureModes = Array.isArray(failureModes) ? failureModes : [];
+    if (!failureModes.length) return '';
+    return (
+      '<h4 class="subhead-sm">Failure modes</h4><table class="failure-table"><tbody>' +
+      failureModes
+        .map(function (f) {
+          if (!f) return '';
+          return (
+            '<tr><td class="fail-case">' + esc(f.case || '') + '</td>' +
+            '<td class="fail-handling">' + esc(f.handling || '') + '</td></tr>'
+          );
+        })
+        .join('') +
+      '</tbody></table>'
+    );
+  }
+
+  // Edge cases are the honesty mechanism of the whole console: a known-gap
+  // row gets a loud, unmistakable warning treatment (not a subtle tint) so
+  // it can never quietly blend in with the handled ones.
+  function edgeCasesSectionHtml(edgeCases) {
+    edgeCases = Array.isArray(edgeCases) ? edgeCases : [];
+    if (!edgeCases.length) return '';
+    var rows = edgeCases
+      .map(function (ec) {
+        if (!ec) return '';
+        var isGap = ec.status === 'known-gap';
+        return (
+          '<tr class="' + (isGap ? 'edgecase-row edgecase-row-gap' : 'edgecase-row edgecase-row-handled') + '">' +
+          '<td class="edgecase-status">' +
+          '<span class="' + (isGap ? 'edgecase-badge edgecase-badge-gap' : 'edgecase-badge edgecase-badge-handled') + '">' +
+          (isGap ? warningIcon() : '') +
+          (isGap ? 'KNOWN GAP' : 'HANDLED') +
+          '</span></td>' +
+          '<td class="edgecase-case">' + esc(ec.case || '') + '</td>' +
+          '<td class="edgecase-handling">' + esc(ec.handling || '') + '</td>' +
+          '</tr>'
+        );
+      })
+      .join('');
+    return (
+      '<h4 class="subhead-sm">Edge cases</h4>' +
+      '<table class="edgecase-table"><thead><tr><th>Status</th><th>Case</th><th>Handling</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table>'
+    );
+  }
+
+  // Counts known-gap edge cases in a list, for the little warning flags
+  // shown on stage nodes / branch pills / cross-cutting cards.
+  function countKnownGaps(edgeCases) {
+    edgeCases = Array.isArray(edgeCases) ? edgeCases : [];
+    return edgeCases.filter(function (ec) { return ec && ec.status === 'known-gap'; }).length;
+  }
+
+  function gapFlagHtml(count) {
+    if (!count) return '';
+    return (
+      '<span class="gap-flag" title="' + esc(count) + ' known gap' + (count === 1 ? '' : 's') + '">' +
+      warningIcon() + esc(count) +
+      '</span>'
+    );
+  }
+
+  // The full body of a workflow-shaped record: purpose, steps, invariants,
+  // failure modes, edge cases. Used for LIST entries both in the Workflows
+  // section and (via id lookup) as Journey branch/cross-cutting detail.
+  function workflowDetailBodyHtml(wf) {
+    if (!wf) return '<p class="muted">Workflow not found.</p>';
+    var steps = Array.isArray(wf.steps) ? wf.steps : [];
+    return (
+      (wf.purpose ? '<p class="workflow-purpose">' + esc(wf.purpose) + '</p>' : '') +
+      (steps.length
+        ? '<ol class="flow-diagram">' + stepsListHtml(steps) + '</ol>'
+        : '<p class="muted">No steps documented.</p>') +
+      invariantsSectionHtml(wf.invariants) +
+      failureModesSectionHtml(wf.failureModes) +
+      edgeCasesSectionHtml(wf.edgeCases)
+    );
+  }
+
+  // Toggles one collapsible detail panel open/closed, keeping its trigger
+  // button's aria-expanded in sync. Shared by every expandable thing in the
+  // Journey section (stage nodes, branch pills, cross-cutting cards).
+  function toggleDetail(btn, detail) {
+    if (!detail) return;
+    var willOpen = !detail.classList.contains('open');
+    detail.classList.toggle('open', willOpen);
+    if (btn) btn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+  }
+
+  // ----------------------------------------------------------------------
+  // Section 0: Journey — the master spine
+  //
+  // Renders SW.Workflows.JOURNEY as one continuous vertical flow: stages in
+  // order, ending in the terminal "everyone settled up" node. Each stage's
+  // branches (workflow ids from SW.Workflows.LIST) hang off it in an
+  // indented rail with an elbow connector, so it's always obvious which
+  // stage a branch belongs to. Cross-cutting LIST entries (stage: null)
+  // render as a separate band below the spine.
+  // ----------------------------------------------------------------------
+
+  function renderJourney() {
+    var root = qs('#section-journey .section-body');
+    if (!root) return;
+
+    var journey = SW.Workflows && SW.Workflows.JOURNEY;
+    var list = (SW.Workflows && SW.Workflows.LIST) || [];
+
+    if (!journey || !Array.isArray(journey.stages) || !journey.stages.length) {
+      root.innerHTML = '<p class="muted">SW.Workflows.JOURNEY is missing, malformed, or not loaded yet.</p>';
+      return;
+    }
+
+    // Map every LIST entry by id so stage.branches (an array of ids) can
+    // look up the full workflow record to render inline.
+    var byId = {};
+    list.forEach(function (wf) {
+      if (wf && wf.id) byId[wf.id] = wf;
+    });
+
+    var allEdgeCases = [];
+    journey.stages.forEach(function (stage) {
+      if (stage && Array.isArray(stage.edgeCases)) {
+        allEdgeCases = allEdgeCases.concat(stage.edgeCases);
+      }
+    });
+    list.forEach(function (wf) {
+      if (wf && Array.isArray(wf.edgeCases)) {
+        allEdgeCases = allEdgeCases.concat(wf.edgeCases);
+      }
+    });
+    var handledCount = allEdgeCases.filter(function (ec) { return ec && ec.status === 'handled'; }).length;
+    var gapCount = countKnownGaps(allEdgeCases);
+
+    var summaryHtml =
+      (journey.summary ? '<p class="lead">' + esc(journey.summary) + '</p>' : '') +
+      '<div class="journey-gap-summary">' +
+      '<span class="gap-chip gap-chip-handled">' + esc(handledCount) + ' edge case' +
+      (handledCount === 1 ? '' : 's') + ' handled</span>' +
+      '<span class="gap-chip gap-chip-gap">' + (gapCount ? warningIcon() : '') + esc(gapCount) +
+      ' known gap' + (gapCount === 1 ? '' : 's') + '</span>' +
+      '</div>';
+
+    var spineHtml = journey.stages
+      .map(function (stage, i) {
+        return journeyStageHtml(stage, i === journey.stages.length - 1, byId);
+      })
+      .join('');
+
+    var terminalHtml = journeyTerminalHtml(journey.terminal);
+
+    var crossCutting = list.filter(function (wf) { return wf && wf.kind === 'cross-cutting'; });
+    var crossCuttingHtml = crossCutting.length ? journeyCrossCuttingHtml(crossCutting) : '';
+
+    root.innerHTML =
+      '<div class="journey-summary">' + summaryHtml + '</div>' +
+      '<div class="journey-spine">' + spineHtml + terminalHtml + '</div>' +
+      crossCuttingHtml;
+
+    wireJourneyInteractions(root);
+  }
+
+  function journeyStageHtml(stage, isLast, byId) {
+    if (!stage) return '';
+    var id = stage.id || '';
+    var n = stage.n !== undefined && stage.n !== null ? stage.n : '';
+    var branches = Array.isArray(stage.branches) ? stage.branches : [];
+    var stageGapCount = countKnownGaps(stage.edgeCases);
+
+    var branchesHtml = branches
+      .map(function (branchId) {
+        var wf = byId[branchId];
+        if (!wf) {
+          return (
+            '<div class="journey-branch journey-branch-missing">' +
+            elbowIcon() +
+            '<span class="journey-branch-title muted">unknown workflow: ' + esc(branchId) + '</span>' +
+            '</div>'
+          );
+        }
+        var wfGapCount = countKnownGaps(wf.edgeCases);
+        return (
+          '<div class="journey-branch">' +
+          '<button type="button" class="journey-branch-btn" aria-expanded="false" data-branch-id="' + esc(wf.id) + '">' +
+          elbowIcon() +
+          '<span class="journey-branch-title">' + esc(wf.title || wf.id) + '</span>' +
+          gapFlagHtml(wfGapCount) +
+          '<span class="journey-branch-chevron">' + chevronIcon() + '</span>' +
+          '</button>' +
+          '<div class="journey-branch-detail">' + workflowDetailBodyHtml(wf) + '</div>' +
+          '</div>'
+        );
+      })
+      .join('');
+
+    var entryExitHtml =
+      (stage.entry || stage.exit)
+        ? '<div class="journey-entry-exit">' +
+          (stage.entry ? '<div><h4 class="subhead-sm">Entry condition</h4><p>' + esc(stage.entry) + '</p></div>' : '') +
+          (stage.exit ? '<div><h4 class="subhead-sm">Exit condition</h4><p>' + esc(stage.exit) + '</p></div>' : '') +
+          '</div>'
+        : '';
+
+    var detailHtml =
+      entryExitHtml +
+      (Array.isArray(stage.steps) && stage.steps.length
+        ? '<h4 class="subhead-sm">Steps</h4><ol class="flow-diagram">' + stepsListHtml(stage.steps) + '</ol>'
+        : '') +
+      invariantsSectionHtml(stage.invariants) +
+      edgeCasesSectionHtml(stage.edgeCases);
+
+    return (
+      '<div class="journey-stage" id="journey-stage-' + esc(id) + '">' +
+      '<div class="journey-stage-row">' +
+      '<div class="journey-stage-spine">' +
+      '<div class="journey-node-circle">' + esc(n) + '</div>' +
+      (isLast ? '' : '<div class="journey-connector"></div>') +
+      '</div>' +
+      '<div class="journey-stage-content">' +
+      '<button type="button" class="journey-node-header" aria-expanded="false">' +
+      '<span class="journey-node-title">' + esc(stage.title || id || 'Stage') + '</span>' +
+      '<span class="journey-node-purpose">' + esc(stage.purpose || '') + '</span>' +
+      gapFlagHtml(stageGapCount) +
+      '<span class="journey-node-chevron">' + chevronIcon() + '</span>' +
+      '</button>' +
+      '<div class="journey-stage-detail">' + detailHtml + '</div>' +
+      (branches.length
+        ? '<div class="journey-branches-rail"><div class="journey-branches-label">Branches</div>' + branchesHtml + '</div>'
+        : '') +
+      '</div>' +
+      '</div>' +
+      '</div>'
+    );
+  }
+
+  function journeyTerminalHtml(terminal) {
+    if (!terminal) return '';
+    return (
+      '<div class="journey-terminal">' +
+      '<div class="journey-stage-row">' +
+      '<div class="journey-stage-spine"><div class="journey-node-circle journey-terminal-circle">' + checkIcon() + '</div></div>' +
+      '<div class="journey-stage-content">' +
+      '<div class="journey-terminal-title">' + esc(terminal.title || terminal.id || 'Settled') + '</div>' +
+      (terminal.description ? '<p class="journey-terminal-desc">' + esc(terminal.description) + '</p>' : '') +
+      invariantsSectionHtml(terminal.invariants) +
+      '</div>' +
+      '</div>' +
+      '</div>'
+    );
+  }
+
+  function journeyCrossCuttingHtml(entries) {
+    var cardsHtml = entries
+      .map(function (wf) {
+        var gapCount = countKnownGaps(wf.edgeCases);
+        return (
+          '<div class="cross-cutting-card">' +
+          '<button type="button" class="cross-cutting-header" aria-expanded="false" data-cross-id="' + esc(wf.id || '') + '">' +
+          '<span class="cross-cutting-title">' + esc(wf.title || wf.id || 'Untitled') + '</span>' +
+          (wf.trigger ? '<span class="cross-cutting-trigger">' + esc(wf.trigger) + '</span>' : '') +
+          gapFlagHtml(gapCount) +
+          '<span class="cross-cutting-chevron">' + chevronIcon() + '</span>' +
+          '</button>' +
+          '<div class="cross-cutting-detail">' + workflowDetailBodyHtml(wf) + '</div>' +
+          '</div>'
+        );
+      })
+      .join('');
+
+    return (
+      '<div class="journey-crosscutting">' +
+      '<h3 class="subhead">Cross-cutting concerns</h3>' +
+      '<p class="journey-crosscutting-desc">These apply at every stage, rather than at one point on the spine.</p>' +
+      '<div class="cross-cutting-list">' + cardsHtml + '</div>' +
+      '</div>'
+    );
+  }
+
+  function wireJourneyInteractions(root) {
+    qsa('.journey-node-header', root).forEach(function (btn) {
+      var content = btn.parentElement;
+      var detail = content ? qs('.journey-stage-detail', content) : null;
+      btn.addEventListener('click', function () {
+        toggleDetail(btn, detail);
+      });
+    });
+
+    qsa('.journey-branch-btn', root).forEach(function (btn) {
+      var wrap = btn.parentElement;
+      var detail = wrap ? qs('.journey-branch-detail', wrap) : null;
+      btn.addEventListener('click', function () {
+        toggleDetail(btn, detail);
+      });
+    });
+
+    qsa('.cross-cutting-header', root).forEach(function (btn) {
+      var card = btn.parentElement;
+      var detail = card ? qs('.cross-cutting-detail', card) : null;
+      btn.addEventListener('click', function () {
+        toggleDetail(btn, detail);
+      });
+    });
   }
 
   // ----------------------------------------------------------------------
@@ -327,6 +711,7 @@ var SW = SW || {};
     var needle = term.toLowerCase();
     var steps = wf.steps || [];
     var failureModes = wf.failureModes || [];
+    var edgeCases = wf.edgeCases || [];
     var haystack = [
       wf.id,
       wf.title,
@@ -334,6 +719,7 @@ var SW = SW || {};
       wf.purpose,
       (wf.invariants || []).join(' '),
       failureModes.map(function (f) { return (f.case || '') + ' ' + (f.handling || ''); }).join(' '),
+      edgeCases.map(function (ec) { return (ec.case || '') + ' ' + (ec.handling || ''); }).join(' '),
       steps.map(function (s) { return [s.actor, s.action, s.detail, s.file].join(' '); }).join(' '),
     ]
       .join(' ')
@@ -377,53 +763,11 @@ var SW = SW || {};
     });
   }
 
+  // Renders one workflow's card using the same shared step/invariant/
+  // failure-mode/edge-case renderers the Journey section uses, so a
+  // workflow's LIST entry looks the same whether it's found here or
+  // expanded as a Journey branch / cross-cutting card.
   function workflowCardHtml(wf) {
-    var steps = wf.steps || [];
-    var invariants = wf.invariants || [];
-    var failureModes = wf.failureModes || [];
-
-    var stepsHtml = steps
-      .map(function (step, i) {
-        var isLast = i === steps.length - 1;
-        var n = step.n !== undefined && step.n !== null ? step.n : i + 1;
-        return (
-          '<li class="flow-step">' +
-          '<div class="flow-step-marker"><span class="flow-step-n">' + esc(n) + '</span></div>' +
-          '<div class="flow-step-body">' +
-          '<div class="flow-step-top">' +
-          '<span class="actor-badge actor-' + esc(actorSlug(step.actor)) + '">' +
-          esc(step.actor || 'Unknown') +
-          '</span>' +
-          '<span class="flow-step-action">' + esc(step.action || '') + '</span>' +
-          '</div>' +
-          (step.detail ? '<div class="flow-step-detail">' + esc(step.detail) + '</div>' : '') +
-          (step.file ? '<div class="flow-step-file"><code>' + esc(step.file) + '</code></div>' : '') +
-          '</div>' +
-          (!isLast ? '<div class="flow-step-arrow">' + downArrowIcon() + '</div>' : '') +
-          '</li>'
-        );
-      })
-      .join('');
-
-    var invariantsHtml = invariants.length
-      ? '<h4 class="subhead-sm">Invariants</h4><ul class="invariants-list">' +
-        invariants.map(function (inv) { return '<li>' + esc(inv) + '</li>'; }).join('') +
-        '</ul>'
-      : '';
-
-    var failuresHtml = failureModes.length
-      ? '<h4 class="subhead-sm">Failure modes</h4><table class="failure-table"><tbody>' +
-        failureModes
-          .map(function (f) {
-            return (
-              '<tr><td class="fail-case">' + esc(f.case || '') + '</td>' +
-              '<td class="fail-handling">' + esc(f.handling || '') + '</td></tr>'
-            );
-          })
-          .join('') +
-        '</tbody></table>'
-      : '';
-
     return (
       '<article class="workflow-card" id="wf-' + esc(wf.id || '') + '">' +
       '<button type="button" class="workflow-card-header" aria-expanded="false">' +
@@ -431,14 +775,7 @@ var SW = SW || {};
       '<span class="workflow-trigger">' + esc(wf.trigger || '') + '</span>' +
       '<span class="workflow-toggle-icon">' + chevronIcon() + '</span>' +
       '</button>' +
-      '<div class="workflow-card-body">' +
-      (wf.purpose ? '<p class="workflow-purpose">' + esc(wf.purpose) + '</p>' : '') +
-      (steps.length
-        ? '<ol class="flow-diagram">' + stepsHtml + '</ol>'
-        : '<p class="muted">No steps documented.</p>') +
-      invariantsHtml +
-      failuresHtml +
-      '</div>' +
+      '<div class="workflow-card-body">' + workflowDetailBodyHtml(wf) + '</div>' +
       '</article>'
     );
   }

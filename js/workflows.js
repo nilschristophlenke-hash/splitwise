@@ -1,642 +1,1242 @@
 // js/workflows.js
 //
-// SW.Workflows - a structured, in-code description of how this app
-// actually works: its architecture, data model, workflows, algorithms
-// and conceptual state machine. It is consumed only by admin.js to
-// render the "Overview / Workflows / Data model / Algorithms / State
-// machine" sections of the admin console - it has no effect on the app
-// itself.
+// A machine-readable description of how this app actually works. The admin
+// console renders it; nothing here is hand-written HTML, so the docs and the
+// diagrams cannot drift apart from each other.
 //
-// This file is written LAST, after js/model.js and js/store.js exist, so
-// that everything below describes real, tested behaviour rather than
-// intentions. If you change model.js or store.js, update this file too.
+// They CAN still drift from the code, which is the real risk with a file like
+// this. Two habits keep it honest:
+//   1. Everything below names a real function in a real file. If you rename
+//      something, this file is part of the change.
+//   2. Known gaps are written down as gaps, not quietly omitted. A document
+//      that only lists what works is marketing, not documentation.
+//
+// Shape:
+//   JOURNEY  - one continuous path from an empty app to everyone settled up.
+//              This is the spine. Each stage names the branches hanging off it.
+//   LIST     - every branch and every cross-cutting concern, in full detail.
+//   Plus the data model, the two real algorithms, and the state machine.
 
 var SW = SW || {};
 
 SW.Workflows = (function () {
   'use strict';
 
-  // =========================================================================
-  // ARCHITECTURE
-  // =========================================================================
+  // =======================================================================
+  // Architecture
+  // =======================================================================
 
   var ARCHITECTURE = {
     summary:
-      "Nils' Splitwise clone is a single-page vanilla-JS app with a strict one-way data " +
-      'flow: views dispatch actions into SW.Store, SW.Store validates and applies them ' +
-      '(delegating all money math to SW.Model), persists the result to localStorage, and ' +
-      'notifies subscribers, which re-render. SW.Model is pure and has zero dependencies ' +
-      'on the DOM or storage, so its logic is unit-tested directly in Node with no build ' +
-      'step or framework; SW.Workflows is this separate, hand-written registry that the ' +
-      'admin console renders to document how all of the above actually behaves.',
+      'A shared expense tracker with no build step and no runtime dependencies: ' +
+      'plain HTML, CSS and classic scripts on one global namespace. It runs in ' +
+      'two modes against the same UI - a local demo kept in this browser, and a ' +
+      'shared mode backed by Supabase where a whole friend group works from one ' +
+      'set of books. The arithmetic lives in a pure module that never touches the ' +
+      'DOM, the network or storage, which is why it can be tested exhaustively.',
     layers: [
       {
-        name: 'View - main app',
-        files: ['index.html', 'css/styles.css', 'js/app.js'],
+        name: 'View',
+        files: ['index.html', 'js/app.js', 'css/styles.css'],
         responsibility:
-          'Renders the sidebar, group view, modals and toasts from state; collects user ' +
-          'input; dispatches actions. Never reads/writes localStorage and never mutates ' +
-          'state objects directly - it only calls SW.Model and SW.Store.',
+          'Renders state and turns clicks into actions. Holds no truth of its ' +
+          'own beyond which modal is open and what is half-typed into a form. ' +
+          'Talks to whichever store is active through one store() accessor, and ' +
+          'does not know or care which one it got.',
       },
       {
-        name: 'View - admin console',
-        files: ['admin.html', 'css/admin.css', 'js/admin.js'],
+        name: 'Presentation',
+        files: ['js/i18n.js', 'js/router.js'],
         responsibility:
-          'A read-only introspection UI behind a client-side demo password gate. Renders ' +
-          'SW.Workflows (this file) as documentation, and SW.Store.getState() plus ' +
-          'SW.Model as live data - counts, balances, and integrity checks.',
+          'Language (English/German, including money and date formatting) and ' +
+          'URLs (deep links to a group, invite links that carry a join code). ' +
+          'Both are additive: the app works with either missing.',
+      },
+      {
+        name: 'Identity',
+        files: ['js/auth.js', 'js/config.js'],
+        responsibility:
+          'Email-and-password accounts through Supabase Auth. No third-party ' +
+          'identity provider is involved. Degrades to a signed-out no-op when no ' +
+          'backend is configured, which is what makes demo mode possible.',
       },
       {
         name: 'Store',
-        files: ['js/store.js'],
+        files: ['js/store.js', 'js/remote-store.js'],
         responsibility:
-          'The single source of truth. Holds state in memory, exposes dispatch(action) ' +
-          'to validate and apply changes, persists to localStorage after every successful ' +
-          'mutation, and calls subscribers with a fresh, immutable-ish snapshot.',
+          'Two implementations of one API (init/getState/subscribe/dispatch). ' +
+          'SW.Store keeps everything in localStorage; SW.RemoteStore keeps it in ' +
+          'Supabase and adds optimistic writes, rollback and realtime updates.',
       },
       {
         name: 'Model',
         files: ['js/model.js'],
         responsibility:
-          'Pure, dependency-free functions: amount parsing/formatting, split calculation ' +
-          '(largest-remainder), balance computation, and debt simplification (greedy ' +
-          'min-cash-flow). No DOM, no storage - safe to require() and unit test in Node.',
+          'Pure functions: parsing money, splitting an amount, computing ' +
+          'balances, minimising the number of payments. No DOM, no storage, no ' +
+          'network, no clock. Same input, same output, always.',
       },
       {
-        name: 'Workflows registry',
-        files: ['js/workflows.js'],
+        name: 'Database',
+        files: ['supabase/schema.sql'],
         responsibility:
-          "This file. A data description of the app's own workflows, data model and " +
-          'algorithms, consumed only by the admin console for documentation purposes.',
-      },
-      {
-        name: 'Persistence',
-        files: ['localStorage'],
-        responsibility:
-          "Browser key/value storage under the key 'splitwise.state.v1'. Every read and " +
-          'write is wrapped in try/catch by SW.Store, since private-browsing modes and ' +
-          'quota limits can throw, and the key does not exist at all in Node.',
+          'Postgres with row-level security deciding who may see what, and ' +
+          'validated functions deciding what is allowed to be written at all. ' +
+          'This layer is the authority on both questions - the client is a ' +
+          'convenience, not a gatekeeper.',
       },
     ],
     principles: [
-      'Single source of truth in SW.Store - views never read or write localStorage directly.',
-      'Money is always an integer number of cents; floats only ever appear transiently as ' +
-        'split weights (percent values, share counts) on the way into splitExpense().',
-      'SW.Model is pure and DOM-free, so its logic is unit-testable in plain Node with no framework.',
-      'SW.Store.dispatch never throws - it always returns {ok:true, ...} or {ok:false, error}.',
-      'Every successful mutating dispatch appends a human-readable ActivityItem.',
-      'getState() hands out a deep copy (structuredClone, or a JSON round-trip fallback), ' +
-        'never a live reference, so a view cannot accidentally corrupt the store.',
-      'Deterministic algorithms (largest-remainder split, greedy min-cash-flow) so the same ' +
-        'input always produces the same output - which is exactly what makes them testable.',
+      'Money is an integer number of cents, everywhere, always. Formatting to "€12.30" happens only at the moment of rendering.',
+      'A split adds back up to the total, exactly. Enforced in the database, not only in the browser.',
+      'The client validates for a fast, kind error message. The server validates because the client can be bypassed.',
+      'One store API, two implementations, so the UI never branches on which backend it is talking to.',
+      'Optimistic writes: apply locally, show it instantly, and roll back loudly if the server disagrees.',
+      'Known gaps are documented as gaps. Silence would be worse than the gap.',
     ],
   };
 
-  // =========================================================================
-  // DATA_MODEL
-  // =========================================================================
+  // =======================================================================
+  // The journey - one path, from an empty app to everyone settled up
+  // =======================================================================
 
-  var DATA_MODEL = [
-    {
-      entity: 'State (root)',
-      fields: [
-        { name: 'version', type: 'number', note: 'Schema version, currently 1. IMPORT_STATE rejects anything else.' },
-        { name: 'groups', type: 'Group[]', note: 'Every group the user is part of.' },
-        { name: 'expenses', type: 'Expense[]', note: 'Every expense AND settlement, across all groups.' },
-        { name: 'activity', type: 'ActivityItem[]', note: 'A flat, newest-first human-readable log.' },
-        { name: 'ui', type: '{ currentGroupId, currentUserId }', note: 'Transient view state, persisted along with the rest.' },
-      ],
-      relations: ['has many Group', 'has many Expense', 'has many ActivityItem'],
-    },
-    {
-      entity: 'Group',
-      fields: [
-        { name: 'id', type: 'string', note: '"g_" + 8 random base36 chars.' },
-        { name: 'name', type: 'string', note: 'e.g. "Lisbon Flat".' },
-        { name: 'currency', type: 'string', note: 'e.g. "EUR" - drives the symbol used by formatMoney.' },
-        { name: 'members', type: 'Member[]', note: 'Embedded array, not a separate top-level collection.' },
-        { name: 'createdAt', type: 'number', note: 'Milliseconds since epoch.' },
-      ],
-      relations: ['has many Member (embedded)', 'has many Expense (linked by expense.groupId)'],
-    },
-    {
-      entity: 'Member',
-      fields: [
-        { name: 'id', type: 'string', note: '"m_" + 8 random base36 chars.' },
-        { name: 'name', type: 'string', note: 'Display name, e.g. "Nils".' },
-      ],
-      relations: ['embedded inside exactly one Group.members array'],
-    },
-    {
-      entity: 'Expense',
-      fields: [
-        { name: 'id', type: 'string', note: '"e_" + 8 random base36 chars. Shared id space with settlements.' },
-        { name: 'groupId', type: 'string', note: 'References Group.id.' },
-        { name: 'type', type: '"expense" | "settlement"', note: 'A settlement is an Expense with a fixed shape (see below).' },
-        { name: 'description', type: 'string', note: 'e.g. "Groceries", or "Mara paid Nils" for a settlement.' },
-        { name: 'amountCents', type: 'integer', note: 'Always the whole amount, in cents. Never a float.' },
-        { name: 'paidBy', type: 'string', note: 'References a Group.members[].id.' },
-        { name: 'splitMode', type: '"equal"|"exact"|"percent"|"shares"', note: 'How amountCents is divided among participants.' },
-        { name: 'participants', type: '{memberId, value}[]', note: 'value means shareCents (exact), percentage (percent), share count (shares), or is ignored (equal).' },
-        { name: 'category', type: 'string', note: 'general|food|rent|transport|fun|utilities|travel.' },
-        { name: 'date', type: 'string', note: 'ISO date, e.g. "2026-09-03".' },
-        { name: 'createdAt', type: 'number', note: 'Milliseconds since epoch, used for tie-breaking display order.' },
-        { name: 'note', type: 'string', note: 'Optional free-text note.' },
-      ],
-      relations: [
-        'belongs to one Group (groupId)',
-        'paidBy references a Group.members entry',
-        'each participants[].memberId references a Group.members entry',
-      ],
-    },
-    {
-      entity: 'ActivityItem',
-      fields: [
-        { name: 'id', type: 'string', note: '"a_" + 8 random base36 chars.' },
-        { name: 'ts', type: 'number', note: 'Milliseconds since epoch.' },
-        { name: 'kind', type: '"group"|"expense"|"settlement"|"member"|"system"', note: 'What kind of thing happened.' },
-        { name: 'text', type: 'string', note: 'A ready-to-render human-readable sentence, e.g. "Mara paid Nils €15.00.".' },
-      ],
-      relations: ['not linked back to its source record by id - it is a flat, append-only log'],
-    },
-  ];
+  var JOURNEY = {
+    id: 'master',
+    title: 'From an empty app to everyone settled up',
+    summary:
+      'Every feature in this app exists to move a group along one path: strangers ' +
+      'with an unopened link at one end, and a group where nobody owes anybody ' +
+      'anything at the other. The eight stages below are that path. Everything ' +
+      'else - joining, editing, rotating an invite code, switching language, ' +
+      'recovering a password - is a branch hanging off one of them, and every ' +
+      'branch eventually rejoins the spine or ends the journey deliberately.',
 
-  // =========================================================================
-  // LIST - every user-triggerable (or otherwise notable) workflow
-  // =========================================================================
+    stages: [
+      // ------------------------------------------------------------------
+      {
+        id: 'arrive',
+        n: 1,
+        title: 'Arrive',
+        purpose:
+          'Work out which world the visitor is in before showing them anything: ' +
+          'a configured backend or not, a live session or not, and what the URL ' +
+          'is asking for.',
+        entry: 'Someone loads index.html.',
+        exit: 'The app knows which store is active and what the URL wants.',
+        steps: [
+          { n: 1, actor: 'View', action: 'init()', detail: 'Wires static events, dialogs and the router, then decides the mode.', file: 'js/app.js' },
+          { n: 2, actor: 'Config', action: 'SW.Config.isConfigured()', detail: 'True only when both a Supabase URL and a publishable key are present.', file: 'js/config.js' },
+          { n: 3, actor: 'Router', action: 'SW.Router.init()', detail: 'Reads ?join=<code> or ?g=<id> and remembers the intent for later - the data has not loaded yet.', file: 'js/router.js' },
+          { n: 4, actor: 'Identity', action: 'SW.Auth.init()', detail: 'Restores an existing session, then cleans OAuth/recovery parameters out of the address bar.', file: 'js/auth.js' },
+          { n: 5, actor: 'View', action: 'startLocalMode() or showAuthScreen()', detail: 'No backend configured means demo mode immediately. Configured but signed out means the sign-in screen.', file: 'js/app.js' },
+        ],
+        invariants: [
+          'The app always boots into something usable - a blank page is never an acceptable outcome of a failed backend.',
+          'Language is decided before the first paint, so nothing flashes English at a German visitor.',
+        ],
+        edgeCases: [
+          { case: 'No Supabase project configured at all', handling: 'Falls straight into local demo mode. This is how the app behaves for anyone who clones the repo without credentials.', status: 'handled' },
+          { case: 'Backend configured but unreachable (offline, project paused)', handling: 'SW.Auth.init() rejects, a toast explains, and the app starts in demo mode rather than showing a dead sign-in form.', status: 'handled' },
+          { case: 'Deep link ?g=<id> on a cold load, before groups exist in memory', handling: 'The intent is parked in pendingGroupFromUrl and applied by applyPendingUrlIntent() once the store finishes loading.', status: 'handled' },
+          { case: 'Deep link ?g=<id> for a group this account cannot see', handling: 'SELECT_GROUP fails, a toast says the link is not available on this account, and the URL is reset. It never silently shows a different group.', status: 'handled' },
+          { case: 'Invite link ?join=<code> while signed out', handling: 'The code is held until after sign-in, then the join dialog opens pre-filled.', status: 'handled' },
+          { case: 'Return from a password-reset email (type=recovery)', handling: 'SW.Auth.isPasswordRecovery() is captured at script load, before the URL is cleaned, and the set-new-password form is shown.', status: 'handled' },
+          { case: 'localStorage unavailable (private mode, storage disabled)', handling: 'Every access is wrapped; the app runs in memory for the session and simply does not persist.', status: 'handled' },
+        ],
+        branches: ['demo-mode', 'deep-links', 'backend-unreachable'],
+      },
+
+      // ------------------------------------------------------------------
+      {
+        id: 'identify',
+        n: 2,
+        title: 'Become someone',
+        purpose:
+          'Turn an anonymous visitor into a named account, because "who owes ' +
+          'whom" is meaningless without a stable who.',
+        entry: 'A backend is configured and nobody is signed in.',
+        exit: 'There is a session, a user id and a display name.',
+        steps: [
+          { n: 1, actor: 'View', action: 'Sign-in card', detail: 'One card doubles as sign-up; a link toggles between the two modes and swaps the password autocomplete hint.', file: 'js/app.js' },
+          { n: 2, actor: 'View', action: 'Client-side checks', detail: 'Email present, password at least 8 characters, and a display name when signing up - checked before any network call.', file: 'js/app.js' },
+          { n: 3, actor: 'Identity', action: 'SW.Auth.signUp / signInWithPassword', detail: 'Supabase Auth. Terse server messages are mapped to sentences a person can act on by friendlyAuthError().', file: 'js/auth.js' },
+          { n: 4, actor: 'Database', action: 'handle_new_user() trigger', detail: 'Mirrors the new auth user into public.profiles, copying full_name from the sign-up metadata.', file: 'supabase/schema.sql' },
+          { n: 5, actor: 'View', action: 'startRemoteMode()', detail: 'Swaps SW.Store for SW.RemoteStore, shows the account chip, hides the demo user picker.', file: 'js/app.js' },
+        ],
+        invariants: [
+          'ui.currentUserId in shared mode is always the signed-in account - it is not a guess and not user-selectable.',
+          'A failed sign-in never leaves the submit button disabled.',
+        ],
+        edgeCases: [
+          { case: 'Password shorter than 8 characters', handling: 'Rejected in the browser before any request is sent.', status: 'handled' },
+          { case: 'Email already registered', handling: 'friendlyAuthError() turns the raw message into "There is already an account with that email — sign in instead."', status: 'handled' },
+          { case: '"Confirm email" is switched on in Supabase', handling: 'Sign-up returns a user but no session. That exact case is detected and reported as "Account created. Check your email…" rather than looking like a silent failure.', status: 'handled' },
+          { case: 'Wrong password', handling: 'Mapped to "That email and password do not match an account."', status: 'handled' },
+          { case: 'Too many attempts', handling: 'Supabase rate-limits; the message is mapped to a plain "wait a moment and try again".', status: 'handled' },
+          { case: 'Forgotten password', handling: 'A reset flow exists (requestPasswordReset / completePasswordReset). Delivery goes through Supabase\'s shared mailer unless SMTP is configured, so it is rate-limited and often lands in spam.', status: 'known-gap' },
+          { case: 'Nobody proves they own the email address', handling: 'Email confirmation is deliberately off so friends can join without fighting the mailer. An account alone grants nothing - a group is only visible after someone shares its invite code - but the address itself is unverified.', status: 'known-gap' },
+          { case: 'Two people choose the same display name', handling: 'Nothing prevents it. Both appear identically in the payer dropdown and the balances panel, and only the display name is ever shown. In an app about who owes whom, that is a real weakness.', status: 'known-gap' },
+        ],
+        branches: ['sign-up', 'sign-in', 'password-reset', 'sign-out'],
+      },
+
+      // ------------------------------------------------------------------
+      {
+        id: 'form-group',
+        n: 3,
+        title: 'Form the group',
+        purpose: 'Create the shared book, or get into someone else\'s.',
+        entry: 'Signed in (or in demo mode) with no group selected.',
+        exit: 'The account is a member of at least one group.',
+        steps: [
+          { n: 1, actor: 'View', action: 'New group / Join with code', detail: 'Two doors into the same place. In shared mode the "type member names" field is hidden - members are accounts, not strings.', file: 'js/app.js' },
+          { n: 2, actor: 'Store', action: "dispatch ADD_GROUP or JOIN_GROUP", detail: 'ADD_GROUP applies optimistically; JOIN_GROUP cannot, because until the server resolves the code there is no way to know which group it means.', file: 'js/remote-store.js' },
+          { n: 3, actor: 'Database', action: 'create_group() / join_group_by_code()', detail: 'Both are security definer. create_group writes the group and the owner membership in one transaction; join_group_by_code is the only way a membership row can be written at all.', file: 'supabase/schema.sql' },
+          { n: 4, actor: 'Store', action: 'Reconcile', detail: 'The temporary client id is replaced with the server id, or the optimistic row is rolled back and the failure surfaced.', file: 'js/remote-store.js' },
+        ],
+        invariants: [
+          'A group always has exactly one owner, created in the same transaction as the group itself.',
+          'A membership row can only ever be written for auth.uid(), and only by presenting a valid invite code.',
+        ],
+        edgeCases: [
+          { case: 'Empty group name', handling: 'Rejected in the form; the database also constrains name length 1-80.', status: 'handled' },
+          { case: 'Wrong or expired invite code', handling: 'join_group_by_code raises "No group found for that invite code."; the join dialog stays open and shows it.', status: 'handled' },
+          { case: 'Joining a group you are already in', handling: 'on conflict do nothing - a harmless no-op, not an error, and it cannot duplicate the membership row.', status: 'handled' },
+          { case: 'Guessing a group UUID to get in without a code', handling: 'There is deliberately no insert policy on group_members, so a direct write is denied. The RPC is the only door, and it checks the code.', status: 'handled' },
+          { case: 'One account creating unlimited groups', handling: 'create_group caps ownership at 50 per account, because the publishable key is public and anyone can call it.', status: 'handled' },
+          { case: 'Joining takes a round trip and can fail', handling: 'JOIN_GROUP returns {ok:true, pending:true} and reports the real outcome through an onResult callback. The modal says "Joining…" until the answer arrives. It used to close and claim success while the request was still failing.', status: 'handled' },
+        ],
+        branches: ['create-group', 'join-by-code', 'select-group', 'rename-group', 'delete-group'],
+      },
+
+      // ------------------------------------------------------------------
+      {
+        id: 'assemble',
+        n: 4,
+        title: 'Get everyone in',
+        purpose:
+          'Assemble the group before money starts moving. This stage is early on ' +
+          'purpose: an expense only splits between people who are already members, ' +
+          'so latecomers are silently left out of everything logged before them.',
+        entry: 'A group exists with at least its owner in it.',
+        exit: 'Everyone who will share costs is a member.',
+        steps: [
+          { n: 1, actor: 'View', action: 'Invite', detail: 'Shows the invite code and offers a shareable link (?join=<code>) that lands a friend on the join step with the code already filled in.', file: 'js/app.js' },
+          { n: 2, actor: 'Router', action: 'SW.Router.inviteUrl(code)', detail: 'Builds the absolute link. A link is one tap for the receiver; a bare code is a copy-paste and an explanation.', file: 'js/router.js' },
+          { n: 3, actor: 'Friend', action: 'Opens the link, signs up, joins', detail: 'Rejoins the spine at stage 2, then stage 3.', file: 'js/app.js' },
+          { n: 4, actor: 'Database', action: 'is_group_member()', detail: 'From here on, every read and every write in this group is gated on membership.', file: 'supabase/schema.sql' },
+        ],
+        invariants: [
+          'Membership decides visibility completely: a non-member sees zero rows in every table, not a filtered view.',
+          'A group can never be left without an owner.',
+        ],
+        edgeCases: [
+          { case: 'Invite code shared too widely (screenshot in a group chat)', handling: 'The owner can rotate it. The old code stops working immediately.', status: 'handled' },
+          { case: 'A member owes money and tries to leave', handling: 'A trigger refuses while they appear in any expense in that group, so nobody can walk away from a debt by leaving.', status: 'handled' },
+          { case: 'The owner tries to leave', handling: 'Refused unless ownership is handed over first, so a group cannot be stranded with nobody able to manage or delete it.', status: 'handled' },
+          { case: 'Someone joins after expenses already exist', handling: 'They are simply not a participant in anything logged earlier, and their row reads "Not involved". Correct, but nothing in the interface explains why or offers to add them, so it reads like a bug to the person it happens to.', status: 'known-gap' },
+          { case: 'Nobody is told when a friend joins or adds an expense', handling: 'There are no notifications of any kind. In practice someone has to say "I added it" in a chat.', status: 'known-gap' },
+        ],
+        branches: ['invite-and-share', 'rotate-invite-code', 'transfer-ownership', 'leave-group', 'remove-member', 'add-member-demo'],
+      },
+
+      // ------------------------------------------------------------------
+      {
+        id: 'record',
+        n: 5,
+        title: 'Record what was spent',
+        purpose:
+          'Capture one payment and how it divides. This is the stage the whole ' +
+          'app exists for, and the one with the most ways to go wrong.',
+        entry: 'A group with members.',
+        exit: 'A stored expense whose shares add up to its amount, exactly.',
+        steps: [
+          { n: 1, actor: 'View', action: 'Collect the form', detail: 'Description, amount, payer, category, date, split mode and per-participant values.', file: 'js/app.js' },
+          { n: 2, actor: 'Model', action: 'parseAmount()', detail: 'Turns typed text into integer cents. Accepts "12,50", "1.234,56", "€12.50"; returns null for anything else, including negatives.', file: 'js/model.js' },
+          { n: 3, actor: 'Model', action: 'splitExpense()', detail: 'Live preview while typing, so the division is visible before submitting.', file: 'js/model.js' },
+          { n: 4, actor: 'Model', action: 'validateExpense()', detail: 'Delegates the mode rules to splitExpense so the validator and the allocator cannot disagree - a divergence that once let an exact split of 1.00 pay out 1.01.', file: 'js/model.js' },
+          { n: 5, actor: 'Store', action: 'dispatch ADD_EXPENSE', detail: 'Applies to the local cache, notifies subscribers, returns {ok:true} synchronously so the UI updates instantly.', file: 'js/remote-store.js' },
+          { n: 6, actor: 'Database', action: 'create_expense()', detail: 'Re-validates everything and writes the expense and its participants in one transaction. Direct writes to those tables are not permitted.', file: 'supabase/schema.sql' },
+          { n: 7, actor: 'Store', action: 'Reconcile or roll back', detail: 'On success the temporary id is swapped for the server id. On failure the optimistic row is removed and a banner appears.', file: 'js/remote-store.js' },
+        ],
+        invariants: [
+          'sum(shareCents) === amountCents, for every split mode, with no exceptions.',
+          'No cent is invented or lost: leftovers are distributed by largest remainder, deterministically.',
+          'Nothing is ever half-written: the expense and its participants land together or not at all.',
+        ],
+        edgeCases: [
+          { case: 'Unparseable amount ("abc", empty, negative)', handling: 'parseAmount returns null; the form refuses to submit and says why.', status: 'handled' },
+          { case: 'An indivisible amount (10.00 three ways)', handling: 'Largest-remainder allocation gives 3.34 / 3.33 / 3.33. The leftover cent goes to whoever lost most to rounding, and the same input always produces the same answer.', status: 'handled' },
+          { case: 'Exact amounts that do not add up to the total', handling: 'Refused by the client and again by the database, which reports the actual and expected totals.', status: 'handled' },
+          { case: 'Percentages that do not reach 100', handling: 'Refused. The tolerance is a named constant (0.0100001) so that a sum exactly 0.01 away still passes despite binary floating point.', status: 'handled' },
+          { case: 'Infinity or NaN as a share weight', handling: 'Rejected. Both slip past a naive "value > 0" test and would poison every later calculation.', status: 'handled' },
+          { case: 'A negative share that still sums correctly', handling: 'Rejected - it would credit someone instead of charging them.', status: 'handled' },
+          { case: 'The same person listed twice as a participant', handling: 'Rejected in both layers; they would be charged two shares while somebody else got none.', status: 'handled' },
+          { case: 'Payer or participant is not in the group', handling: 'Rejected by the database. Otherwise a member could create a debt for any account in the system - somebody who cannot see the group and would never be told.', status: 'handled' },
+          { case: 'An amount larger than JavaScript can read back accurately', handling: 'Capped below 2^53. Money that changes value when you read it is worse than money you cannot store.', status: 'handled' },
+          { case: 'Absurd dates or a 50,000-character description', handling: 'Constrained in the database: dates within a sane window, description 1-200 characters, note up to 2000.', status: 'handled' },
+          { case: 'Double-clicking submit on a slow connection', handling: 'The submit button disables while the write is in flight.', status: 'handled' },
+          { case: 'Two people editing the same expense at once', handling: 'update_expense refuses a write based on a stale version and says so, instead of letting the second edit silently overwrite the first.', status: 'handled' },
+          { case: 'The write fails after the optimistic update', handling: 'The cache is rolled back and a persistent banner appears. It stays until dismissed or until a later write succeeds - unlike a toast, which vanishes whether or not anyone saw it.', status: 'handled' },
+          { case: 'Changes made while offline', handling: 'They are rolled back, not queued. There is no offline queue and no retry - the work is lost and the banner says so.', status: 'known-gap' },
+          { case: 'Who edited an expense, and what it said before', handling: 'Not recorded. updated_at exists for conflict detection but there is no history and no author trail, which is exactly the question that starts arguments between friends.', status: 'known-gap' },
+        ],
+        branches: ['add-expense', 'split-calculation', 'edit-expense', 'delete-expense', 'validation-rejection', 'edit-conflict'],
+      },
+
+      // ------------------------------------------------------------------
+      {
+        id: 'reconcile',
+        n: 6,
+        title: 'Turn records into balances',
+        purpose: 'Answer one question for each member: am I up or down, and by how much?',
+        entry: 'At least one expense in the group.',
+        exit: 'A net figure per member, summing to exactly zero.',
+        steps: [
+          { n: 1, actor: 'Model', action: 'computeBalances()', detail: 'Credits the payer the full amount, debits each participant their share, for every expense and settlement in the group.', file: 'js/model.js' },
+          { n: 2, actor: 'Model', action: 'Skip the unusable', detail: 'A record whose split cannot be computed is skipped entirely rather than half-applied, so credits and debits never drift apart.', file: 'js/model.js' },
+          { n: 3, actor: 'View', action: 'Balances panel', detail: 'Positive is money owed to you, negative is money you owe. Colour is never the only signal - the sign and the words carry it too.', file: 'js/app.js' },
+        ],
+        invariants: [
+          'The sum of all balances in a group is exactly zero. Every cent charged was paid by someone.',
+          'Every member of the group appears, including those sitting at exactly zero.',
+        ],
+        edgeCases: [
+          { case: 'A settlement', handling: 'Treated as an ordinary expense of type "settlement" paid by the payer to a single participant, so it flows through the same arithmetic instead of needing a parallel code path.', status: 'handled' },
+          { case: 'An expense that cannot be split (only reachable via imported demo data now)', handling: 'Skipped in the balance maths, and the admin console flags it as a record counted in totals but contributing nothing.', status: 'handled' },
+          { case: 'A member who is in an expense but no longer in the group', handling: 'Cannot happen any more - the removal guard refuses while they appear in any expense. It was previously possible and produced an "Unknown" debtor in the settlements list.', status: 'handled' },
+          { case: 'Very many expenses', handling: 'Balances are recomputed from scratch on every render, and every expense of every group loads at boot. Fine for a friend group, wasteful at thousands.', status: 'known-gap' },
+        ],
+        branches: ['compute-balances'],
+      },
+
+      // ------------------------------------------------------------------
+      {
+        id: 'minimise',
+        n: 7,
+        title: 'Reduce it to the fewest payments',
+        purpose:
+          'Six people owing each other in a tangle should not mean fifteen bank ' +
+          'transfers. Turn the balances into the shortest list of payments that ' +
+          'clears them.',
+        entry: 'Balances that are not all zero.',
+        exit: 'A list of concrete "A pays B €X" instructions.',
+        steps: [
+          { n: 1, actor: 'Model', action: 'simplifyDebts()', detail: 'Repeatedly matches the largest creditor with the largest debtor and transfers the smaller of the two amounts.', file: 'js/model.js' },
+          { n: 2, actor: 'Model', action: 'Deterministic ordering', detail: 'Sorted by amount descending, ties broken by member id, so the same balances always produce the same suggestions.', file: 'js/model.js' },
+          { n: 3, actor: 'View', action: 'Suggested settlements', detail: 'Each with a Record button that pre-fills the settlement.', file: 'js/app.js' },
+        ],
+        invariants: [
+          'At most n-1 transfers for n people.',
+          'Applying every suggested transfer brings every balance to exactly zero.',
+          'No transfer is ever zero or negative.',
+        ],
+        edgeCases: [
+          { case: 'Everyone already at zero', handling: 'No transfers, and the panel says so rather than showing an empty box.', status: 'handled' },
+          { case: 'Ties between equal debtors', handling: 'Broken by member id so the output is stable between renders and between devices.', status: 'handled' },
+          { case: 'Rounding across many members', handling: 'Verified by fuzzing: 5,000 random balance sets all settle to exactly zero within the n-1 bound.', status: 'handled' },
+          { case: 'The suggestion is not the fairest, only the shortest', handling: 'The algorithm minimises the number of payments, not who pays whom. It can ask you to pay someone you never directly transacted with. Correct, and occasionally surprising.', status: 'handled' },
+        ],
+        branches: ['simplify-debts'],
+      },
+
+      // ------------------------------------------------------------------
+      {
+        id: 'settle',
+        n: 8,
+        title: 'Settle up',
+        purpose: 'Record the real-world payment that clears a debt.',
+        entry: 'A suggested settlement, or any payment between two members.',
+        exit: 'A settlement record, and balances that moved toward zero.',
+        steps: [
+          { n: 1, actor: 'View', action: 'Settle up / Record', detail: 'Either from the suggestions list, pre-filled, or entered by hand.', file: 'js/app.js' },
+          { n: 2, actor: 'Store', action: 'dispatch ADD_SETTLEMENT', detail: 'Builds an expense with type "settlement", exact split, and the receiver as the single participant.', file: 'js/remote-store.js' },
+          { n: 3, actor: 'Database', action: 'create_expense()', detail: 'The same validated path as any other expense. Settlements are not a special case in the schema.', file: 'supabase/schema.sql' },
+          { n: 4, actor: 'Model', action: 'computeBalances()', detail: 'Both sides move by the settled amount, and the group total is unchanged.', file: 'js/model.js' },
+        ],
+        invariants: [
+          'A settlement moves money between exactly two people and changes no one else\'s balance.',
+          'Recording every suggested settlement leaves every member at exactly zero.',
+        ],
+        edgeCases: [
+          { case: 'Settling more than is owed', handling: 'Allowed - it simply flips the direction of the balance. Real payments are sometimes round numbers.', status: 'handled' },
+          { case: 'Settling a debt someone already paid', handling: 'Both are recorded and the balance goes negative, which is visible and correctable by deleting one.', status: 'handled' },
+          { case: 'Deleting a settlement', handling: 'Supported, with undo, and the balance returns to what it was.', status: 'handled' },
+          { case: 'How the money actually moved', handling: 'Not captured. There is no link to a payment provider and no record of whether it was cash, a transfer or a favour.', status: 'known-gap' },
+        ],
+        branches: ['settle-up', 'record-suggested'],
+      },
+    ],
+
+    terminal: {
+      id: 'settled',
+      title: 'Everyone is settled up',
+      description:
+        'Every member sits at exactly zero. The group has no outstanding debt in ' +
+        'either direction, the suggestions panel is empty, and the expense history ' +
+        'remains as a record of what happened. This is the state the whole app is ' +
+        'built to reach - and the group can stay here, or start the loop again at ' +
+        'stage 5 with the next shared cost.',
+      invariants: [
+        'Every balance in the group is exactly 0.',
+        'simplifyDebts() returns an empty list.',
+        'The sum of everything paid still equals the sum of everything owed - settling changes who holds the money, never how much there was.',
+      ],
+    },
+  };
+
+  // =======================================================================
+  // Branches and cross-cutting concerns
+  // =======================================================================
 
   var LIST = [
+    // ---------------- stage 1: arrive ----------------
     {
-      id: 'app-boot',
-      title: 'App boot',
-      trigger: 'Loading index.html (or admin.html) in a browser',
-      purpose: 'Get from a cold page load to a rendered UI backed by real, validated state.',
+      id: 'demo-mode',
+      stage: 'arrive',
+      kind: 'branch',
+      title: 'Try it without an account',
+      trigger: 'A visitor clicks "Try the demo without an account", or no backend is configured.',
+      purpose: 'Let someone use the whole app immediately, with no sign-up and no server.',
       steps: [
-        { n: 1, actor: 'View', action: 'Load scripts in order', detail: 'Classic <script> tags load js/model.js, js/store.js, js/workflows.js, then js/app.js (or js/admin.js), so SW.Model and SW.Store exist before the view code runs.', file: 'index.html' },
-        { n: 2, actor: 'View', action: 'SW.Store.subscribe(render)', detail: 'The view registers a render callback so every future state change repaints the UI.', file: 'js/app.js' },
-        { n: 3, actor: 'Store', action: 'SW.Store.init()', detail: 'Tries to load and shape-validate "splitwise.state.v1" from localStorage; on any failure (missing, corrupt JSON, wrong version/shape) it falls back to buildDemoState() instead.', file: 'js/store.js' },
-        { n: 4, actor: 'Store', action: 'adoptCurrentUserFor(current group)', detail: 'Whether the state came from storage or from buildDemoState(), init() re-points ui.currentUserId at the current group\'s first member if the loaded value isn\'t actually a member of that group.', file: 'js/store.js' },
-        { n: 5, actor: 'Store', action: 'notify()', detail: 'Calls every subscriber once with the initial state snapshot, triggering the first render.', file: 'js/store.js' },
+        { n: 1, actor: 'View', action: 'startLocalMode()', detail: 'Points store() at SW.Store and hides the account chip.', file: 'js/app.js' },
+        { n: 2, actor: 'Store', action: 'SW.Store.init()', detail: 'Loads from localStorage or seeds the demo group.', file: 'js/store.js' },
+        { n: 3, actor: 'Store', action: 'Members are strings', detail: 'In demo mode a member is a typed name, not an account, so ADD_MEMBER works here and only here.', file: 'js/store.js' },
       ],
-      invariants: [
-        'state always has version, groups, expenses, activity and ui after init()',
-        'init() never throws, even if localStorage is unavailable or holds garbage',
-        'after init(), ui.currentUserId is a member of ui.currentGroupId\'s group whenever that group has members',
-      ],
+      invariants: ['Demo data never leaves this browser and is never sent anywhere.'],
       failureModes: [
-        { case: 'localStorage throws (private mode) or holds corrupt/old-version JSON', handling: 'loadFromStorage() catches the error / fails validateStateShape() and returns null; init() falls back to buildDemoState(), so the app always ends up with valid state.' },
+        { case: 'localStorage throws or is full', handling: 'Caught; the app keeps working in memory for the session.' },
+      ],
+      edgeCases: [
+        { case: 'Someone enters real expenses in demo mode, then signs up', handling: 'The data does not come with them. The sign-in screen now warns, with counts, when there is something to lose - but there is still no migration path.', status: 'known-gap' },
       ],
     },
     {
-      id: 'create-group',
-      title: 'Create a group',
-      trigger: 'User submits the "New group" modal',
-      purpose: "Create a group with its initial member roster and switch the app's focus to it.",
+      id: 'deep-links',
+      stage: 'arrive',
+      kind: 'branch',
+      title: 'Open a link to a group or an invite',
+      trigger: 'A URL carrying ?g=<groupId> or ?join=<code>.',
+      purpose: 'Make groups linkable and invites one tap instead of a copy-paste plus an explanation.',
       steps: [
-        { n: 1, actor: 'View', action: 'Collect form fields', detail: 'Name, currency, and a comma-separated member-names field split into an array.', file: 'js/app.js' },
-        { n: 2, actor: 'View', action: 'dispatch ADD_GROUP', detail: 'dispatch({type:"ADD_GROUP", payload:{name, currency, memberNames}}).', file: 'js/app.js' },
-        { n: 3, actor: 'Store', action: 'handlers.ADD_GROUP', detail: 'Trims and validates the name and member names (at least one non-empty name required); builds Member objects with fresh uid("m") ids.', file: 'js/store.js' },
-        { n: 4, actor: 'Store', action: 'Commit', detail: 'Pushes the new Group, sets ui.currentGroupId to it, appends an activity item, persists, and notifies.', file: 'js/store.js' },
+        { n: 1, actor: 'Router', action: 'SW.Router.init()', detail: 'Parses the URL and calls onGroup or onJoin; ?join wins if both are present.', file: 'js/router.js' },
+        { n: 2, actor: 'View', action: 'Park the intent', detail: 'Stored in pendingGroupFromUrl / pendingJoinCode, because a link arrives long before the data does.', file: 'js/app.js' },
+        { n: 3, actor: 'View', action: 'applyPendingUrlIntent()', detail: 'Runs once the store has loaded: selects the group, or opens the join dialog pre-filled.', file: 'js/app.js' },
+        { n: 4, actor: 'Router', action: 'goToGroup / replaceRoot', detail: 'Selecting a group pushes a URL so the back button works; a consumed invite is cleared so a refresh does not reopen it.', file: 'js/router.js' },
+      ],
+      invariants: ['A malformed URL or a missing History API degrades to the normal root view rather than throwing.'],
+      failureModes: [
+        { case: 'The linked group is not visible to this account', handling: 'A toast says so and the URL resets - it never falls through to somebody else\'s group.' },
+      ],
+    },
+    {
+      id: 'backend-unreachable',
+      stage: 'arrive',
+      kind: 'branch',
+      title: 'The backend cannot be reached',
+      trigger: 'SW.Auth.init() rejects - offline, DNS failure, or a paused Supabase project.',
+      purpose: 'Fail into something usable instead of a dead form.',
+      steps: [
+        { n: 1, actor: 'Identity', action: 'init() rejects', detail: 'Every auth method resolves rather than throwing, so this is a rejected promise, not an exception.', file: 'js/auth.js' },
+        { n: 2, actor: 'View', action: 'Toast plus startLocalMode()', detail: 'Says the server could not be reached and starts demo mode.', file: 'js/app.js' },
+      ],
+      invariants: ['A blank page is never an acceptable outcome.'],
+      failureModes: [
+        { case: 'The backend recovers later in the session', handling: 'Not detected automatically; a reload picks it up.', },
+      ],
+    },
+
+    // ---------------- stage 2: identify ----------------
+    {
+      id: 'sign-up',
+      stage: 'identify',
+      kind: 'branch',
+      title: 'Create an account',
+      trigger: 'The sign-in card is switched to "Create one" and submitted.',
+      purpose: 'Make a durable identity that balances can be attached to.',
+      steps: [
+        { n: 1, actor: 'View', action: 'Name, email, password', detail: 'The name is what friends see next to an expense, so it is asked for up front rather than derived from an email.', file: 'js/app.js' },
+        { n: 2, actor: 'Identity', action: 'SW.Auth.signUp()', detail: 'Passes the name as full_name in the user metadata.', file: 'js/auth.js' },
+        { n: 3, actor: 'Database', action: 'handle_new_user()', detail: 'Trigger copies id, email, full_name and avatar into public.profiles.', file: 'supabase/schema.sql' },
+      ],
+      invariants: ['A profile row exists for every auth user, created by the database rather than by the client.'],
+      failureModes: [
+        { case: 'Email already registered', handling: 'Mapped to a plain sentence suggesting sign-in instead.' },
+        { case: 'Confirmation required but no SMTP', handling: 'Reported explicitly rather than appearing to do nothing.' },
+      ],
+    },
+    {
+      id: 'sign-in',
+      stage: 'identify',
+      kind: 'branch',
+      title: 'Sign in',
+      trigger: 'Email and password submitted in sign-in mode.',
+      purpose: 'Restore an identity and its groups.',
+      steps: [
+        { n: 1, actor: 'Identity', action: 'signInWithPassword()', detail: 'Supabase Auth; no third-party provider is involved.', file: 'js/auth.js' },
+        { n: 2, actor: 'View', action: 'onChange fires', detail: 'startRemoteMode() swaps the store and loads the account\'s groups.', file: 'js/app.js' },
+        { n: 3, actor: 'Store', action: 'SW.RemoteStore.init()', detail: 'Fetches groups, memberships, expenses and participants, then subscribes to realtime changes.', file: 'js/remote-store.js' },
+      ],
+      invariants: ['A session restored on reload produces the same view as a fresh sign-in.'],
+      failureModes: [
+        { case: 'Wrong credentials', handling: 'One clear message; the button re-enables.' },
+        { case: 'Loading the groups fails', handling: 'The error banner explains, and the app stays signed in rather than bouncing to the sign-in screen.' },
+      ],
+    },
+    {
+      id: 'password-reset',
+      stage: 'identify',
+      kind: 'branch',
+      title: 'Recover a forgotten password',
+      trigger: '"Forgot password?", or returning from a reset email.',
+      purpose: 'Stop a forgotten password meaning a permanently lost account.',
+      steps: [
+        { n: 1, actor: 'Identity', action: 'requestPasswordReset(email)', detail: 'Sends a reset link back to this page.', file: 'js/auth.js' },
+        { n: 2, actor: 'Identity', action: 'isPasswordRecovery()', detail: 'Captured at script load, before the URL is cleaned, and also from the PASSWORD_RECOVERY auth event.', file: 'js/auth.js' },
+        { n: 3, actor: 'Identity', action: 'completePasswordReset(newPassword)', detail: 'Sets the new password and continues into the app.', file: 'js/auth.js' },
+      ],
+      invariants: ['The recovery signal survives the URL cleanup that strips auth parameters from the address bar.'],
+      failureModes: [
+        { case: 'The email never arrives', handling: 'Supabase\'s shared mailer is rate-limited and frequently filtered as spam. Configuring SMTP is the real fix.' },
+      ],
+      edgeCases: [
+        { case: 'Reset email delivery in the current configuration', handling: 'Unreliable. The flow is correct but depends on a mailer that is not fit for the job until SMTP is configured.', status: 'known-gap' },
+      ],
+    },
+    {
+      id: 'sign-out',
+      stage: 'identify',
+      kind: 'branch',
+      title: 'Sign out',
+      trigger: 'The Sign out button.',
+      purpose: 'End the session and leave nothing readable behind.',
+      steps: [
+        { n: 1, actor: 'Identity', action: 'SW.Auth.signOut()', detail: 'Clears the local user immediately either way, so the UI cannot get stuck signed in because a network call failed.', file: 'js/auth.js' },
+        { n: 2, actor: 'Store', action: 'SW.RemoteStore.reset()', detail: 'Clears the in-memory cache and unsubscribes from realtime. It never deletes rows.', file: 'js/remote-store.js' },
+        { n: 3, actor: 'View', action: 'showAuthScreen()', detail: 'Re-gates the app.', file: 'js/app.js' },
+      ],
+      invariants: ['Signing out never destroys server data - only the local view of it.'],
+      failureModes: [
+        { case: 'The sign-out request fails', handling: 'The local session is cleared regardless; the user is not trapped in the app.' },
+      ],
+    },
+
+    // ---------------- stage 3: form the group ----------------
+    {
+      id: 'create-group',
+      stage: 'form-group',
+      kind: 'branch',
+      title: 'Create a group',
+      trigger: 'The New group form is submitted.',
+      purpose: 'Open a shared book and become its owner.',
+      steps: [
+        { n: 1, actor: 'View', action: 'Name and currency', detail: 'The member-names field is hidden in shared mode - members are accounts who join with a code.', file: 'js/app.js' },
+        { n: 2, actor: 'Store', action: 'dispatch ADD_GROUP', detail: 'Optimistic: the group appears immediately with a temporary id.', file: 'js/remote-store.js' },
+        { n: 3, actor: 'Database', action: 'create_group()', detail: 'Writes the group and the owner membership together, and generates the invite code server-side.', file: 'supabase/schema.sql' },
       ],
       invariants: [
-        'a created group always has at least 1 member',
-        'state.ui.currentGroupId equals the new group\'s id after a successful ADD_GROUP',
+        'The creator is always the owner - the function acts only on auth.uid() and takes no user id from the caller.',
+        'A group and its owner row are created in one transaction; neither can exist without the other.',
       ],
       failureModes: [
-        { case: 'empty group name, or zero non-empty member names', handling: 'dispatch returns {ok:false, error} before touching state; the modal shows the error and nothing is created.' },
+        { case: 'Already owns 50 groups', handling: 'Refused with a plain message.' },
+        { case: 'The write fails', handling: 'The optimistic group is removed and the banner explains.' },
+      ],
+    },
+    {
+      id: 'join-by-code',
+      stage: 'form-group',
+      kind: 'branch',
+      title: 'Join with an invite code',
+      trigger: '"Join with code", or opening an invite link.',
+      purpose: 'The only way into somebody else\'s group.',
+      steps: [
+        { n: 1, actor: 'View', action: 'Code entered', detail: 'Pre-filled when arriving from an invite link.', file: 'js/app.js' },
+        { n: 2, actor: 'Store', action: 'dispatch JOIN_GROUP', detail: 'Returns {ok:true, pending:true} and reports the true outcome via onResult - it cannot be optimistic.', file: 'js/remote-store.js' },
+        { n: 3, actor: 'Database', action: 'join_group_by_code()', detail: 'Security definer, because the caller cannot select a group before belonging to it. Inserts only auth.uid().', file: 'supabase/schema.sql' },
+        { n: 4, actor: 'Store', action: 'Fetch and merge', detail: 'Loads the group and its expenses and selects it.', file: 'js/remote-store.js' },
+      ],
+      invariants: ['A user can only ever add themselves, and only with a valid code.'],
+      failureModes: [
+        { case: 'Unknown code', handling: '"No group found for that invite code." The dialog stays open.' },
+        { case: 'Already a member', handling: 'A harmless no-op.' },
       ],
     },
     {
       id: 'select-group',
-      title: 'Select a group',
-      trigger: 'User clicks a group in the sidebar list',
-      purpose: "Switch the app's focus to a different group, keeping ui.currentUserId meaningful for that group.",
+      stage: 'form-group',
+      kind: 'branch',
+      title: 'Switch between groups',
+      trigger: 'Clicking a group in the sidebar, or a ?g= link.',
+      purpose: 'Change which book is on screen.',
       steps: [
-        { n: 1, actor: 'View', action: 'dispatch SELECT_GROUP', detail: 'dispatch({type:"SELECT_GROUP", payload:{groupId}}).', file: 'js/app.js' },
-        { n: 2, actor: 'Store', action: 'handlers.SELECT_GROUP', detail: 'Confirms the group exists, sets ui.currentGroupId to it.', file: 'js/store.js' },
-        { n: 3, actor: 'Store', action: 'adoptCurrentUserFor(group)', detail: 'ui.currentUserId is stored globally but membership is per-group; if the stored currentUserId is not a member of the newly-selected group, it is re-pointed at group.members[0]. Without this, every "you owe / you lent" figure would silently read as "not involved" after switching to a group the current user isn\'t in.', file: 'js/store.js' },
+        { n: 1, actor: 'Store', action: 'dispatch SELECT_GROUP', detail: 'Sets ui.currentGroupId.', file: 'js/store.js' },
+        { n: 2, actor: 'Store', action: 'adoptCurrentUserFor()', detail: 'In demo mode, re-points "who am I" at a member of the new group. Without this the header shows one person while the state points at another and every share reads "not involved".', file: 'js/store.js' },
+        { n: 3, actor: 'Router', action: 'goToGroup()', detail: 'Pushes a URL so the group is linkable and the back button works.', file: 'js/router.js' },
       ],
-      invariants: [
-        'after a successful SELECT_GROUP, ui.currentUserId is always a member of ui.currentGroupId\'s group (as long as that group has at least one member)',
-      ],
-      failureModes: [
-        { case: 'groupId does not exist', handling: '{ok:false, error:"Group not found."} - ui.currentGroupId is left unchanged.' },
-      ],
+      invariants: ['ui.currentUserId is always a member of the selected group.'],
+      failureModes: [{ case: 'Group not found', handling: 'Rejected; the view does not change.' }],
     },
     {
       id: 'rename-group',
+      stage: 'form-group',
+      kind: 'branch',
       title: 'Rename a group',
-      trigger: 'User clicks "Rename" on the current group and confirms the browser prompt',
-      purpose: "Change a group's display name without touching its members or expenses.",
+      trigger: 'The pencil icon on the group header.',
+      purpose: 'Fix a name without rebuilding the group.',
       steps: [
-        { n: 1, actor: 'View', action: 'window.prompt for the new name', detail: 'Pre-filled with the current name; a null result (Cancel) or an empty/whitespace-only trimmed value aborts before any dispatch.', file: 'js/app.js' },
-        { n: 2, actor: 'View', action: 'dispatch RENAME_GROUP', detail: 'dispatch({type:"RENAME_GROUP", payload:{groupId, name}}).', file: 'js/app.js' },
-        { n: 3, actor: 'Store', action: 'handlers.RENAME_GROUP', detail: 'Confirms the group exists and the trimmed name is non-empty, sets group.name, appends an activity item.', file: 'js/store.js' },
+        { n: 1, actor: 'View', action: 'In-app prompt dialog', detail: 'Replaced window.prompt, which could not be styled and was unpleasant on a phone.', file: 'js/app.js' },
+        { n: 2, actor: 'Store', action: 'dispatch RENAME_GROUP', detail: 'Optimistic, with rollback on failure.', file: 'js/remote-store.js' },
       ],
-      invariants: ['a group\'s id, members and expenses are untouched by a rename'],
-      failureModes: [
-        { case: 'groupId does not exist', handling: '{ok:false, error:"Group not found."}' },
-        { case: 'empty name', handling: '{ok:false, error:"Group name is required."}' },
-      ],
+      invariants: ['A group name is 1-80 characters, enforced by a database constraint as well as the form.'],
+      failureModes: [{ case: 'Not permitted by row-level security', handling: 'Rolled back and reported.' }],
     },
     {
       id: 'delete-group',
+      stage: 'form-group',
+      kind: 'branch',
       title: 'Delete a group',
-      trigger: 'User clicks "Delete" on the current group and confirms the browser confirm() dialog',
-      purpose: 'Permanently remove a group together with every expense and settlement that belongs to it.',
+      trigger: 'The bin icon, then a type-the-name confirmation.',
+      purpose: 'Remove a finished group and everything in it.',
       steps: [
-        { n: 1, actor: 'View', action: 'window.confirm(...)', detail: 'Warns that the group and all its expenses will be deleted and this cannot be undone; a "Cancel" result aborts before any dispatch.', file: 'js/app.js' },
-        { n: 2, actor: 'View', action: 'dispatch DELETE_GROUP', detail: 'dispatch({type:"DELETE_GROUP", payload:{groupId}}).', file: 'js/app.js' },
-        { n: 3, actor: 'Store', action: 'handlers.DELETE_GROUP', detail: 'Confirms the group exists, then filters it out of state.groups AND filters every expense/settlement whose groupId matches it out of state.expenses - a group delete is also a cascading expense delete.', file: 'js/store.js' },
-        { n: 4, actor: 'Store', action: 'Fix up ui.currentGroupId', detail: 'If the deleted group was the current one, ui.currentGroupId is reset to the first remaining group\'s id, or null if none are left; appends an activity item.', file: 'js/store.js' },
+        { n: 1, actor: 'View', action: 'Confirmation dialog', detail: 'States how many expenses will be destroyed and that it affects every member, and requires typing the group name. Focus starts on Cancel, never on the destructive button.', file: 'js/app.js' },
+        { n: 2, actor: 'Store', action: 'dispatch DELETE_GROUP', detail: 'Optimistic, with a full snapshot kept for rollback.', file: 'js/remote-store.js' },
+        { n: 3, actor: 'Database', action: 'delete_group()', detail: 'Owner only. Clears participants, expenses and memberships, then the group, in one transaction.', file: 'supabase/schema.sql' },
       ],
-      invariants: [
-        'after DELETE_GROUP, no expense in state.expenses references the deleted group\'s id',
-        'ui.currentGroupId never points at a group that no longer exists',
-      ],
+      invariants: ['Only the owner can delete. Nothing is left orphaned afterwards.'],
       failureModes: [
-        { case: 'groupId does not exist', handling: '{ok:false, error:"Group not found."} - nothing removed.' },
+        { case: 'A non-owner attempts it', handling: 'Refused by the database and rolled back locally.' },
+      ],
+      edgeCases: [
+        { case: 'Deletion is irreversible', handling: 'There is no soft delete, no export prompt and no undo. The typed confirmation is the only guard, and it destroys other people\'s records as well as your own.', status: 'known-gap' },
+        { case: 'The removal guard could have blocked the cascade', handling: 'delete_group sets a transaction-local flag the guard checks. Disabling the trigger instead would have been table-wide, so somebody leaving a different group at that moment would have slipped past it.', status: 'handled' },
+      ],
+    },
+
+    // ---------------- stage 4: assemble ----------------
+    {
+      id: 'invite-and-share',
+      stage: 'assemble',
+      kind: 'branch',
+      title: 'Invite a friend',
+      trigger: 'The Invite button on a group.',
+      purpose: 'Get the code, or a link carrying it, to another person.',
+      steps: [
+        { n: 1, actor: 'View', action: 'openInviteModal()', detail: 'Shows the code and, when the router is available, a shareable link.', file: 'js/app.js' },
+        { n: 2, actor: 'Router', action: 'inviteUrl(code)', detail: 'origin + pathname + ?join=<code>.', file: 'js/router.js' },
+        { n: 3, actor: 'View', action: 'Copy', detail: 'Clipboard API with a spoken fallback if it is unavailable or blocked.', file: 'js/app.js' },
+      ],
+      invariants: ['The code shown is always the group\'s current code, so a rotated code is never handed out by mistake.'],
+      failureModes: [{ case: 'Clipboard blocked', handling: 'The code is shown for manual copying instead of silently doing nothing.' }],
+      edgeCases: [
+        { case: 'The invite is a bare secret with no per-person tracking', handling: 'Everyone uses the same code and there is no record of who used it or when. Rotation is the only control.', status: 'known-gap' },
       ],
     },
     {
-      id: 'add-member',
-      title: 'Add a member to a group',
-      trigger: 'User submits "Add member" from within a group',
-      purpose: "Grow an existing group's roster.",
+      id: 'rotate-invite-code',
+      stage: 'assemble',
+      kind: 'branch',
+      title: 'Revoke an invite code',
+      trigger: 'The owner rotates the code after it has been shared too widely.',
+      purpose: 'Take back access that was handed out by a screenshot.',
       steps: [
-        { n: 1, actor: 'View', action: 'Collect the new member\'s name', detail: 'A single text field in the group view.', file: 'js/app.js' },
-        { n: 2, actor: 'View', action: 'dispatch ADD_MEMBER', detail: 'dispatch({type:"ADD_MEMBER", payload:{groupId, name}}).', file: 'js/app.js' },
-        { n: 3, actor: 'Store', action: 'handlers.ADD_MEMBER', detail: 'Confirms the group exists and the trimmed name is non-empty, then appends a new {id, name} to group.members.', file: 'js/store.js' },
+        { n: 1, actor: 'Store', action: 'dispatch ROTATE_INVITE_CODE', detail: 'Reports the new code through onResult.', file: 'js/remote-store.js' },
+        { n: 2, actor: 'Database', action: 'rotate_invite_code()', detail: 'Owner only; generates a fresh code and replaces the old one.', file: 'supabase/schema.sql' },
       ],
-      invariants: ['every member has a unique id of the form "m_xxxxxxxx"'],
+      invariants: [
+        'The old code stops working the instant the new one is written.',
+        'Codes are 10 characters drawn from gen_random_uuid(), not random(), because a code is an access secret and random() is a predictable PRNG.',
+      ],
+      failureModes: [{ case: 'A non-owner attempts it', handling: '"Only the group owner can change the invite code."' }],
+    },
+    {
+      id: 'transfer-ownership',
+      stage: 'assemble',
+      kind: 'branch',
+      title: 'Hand over a group',
+      trigger: 'The owner transfers ownership to another member.',
+      purpose: 'Let the owner leave without stranding the group.',
+      steps: [
+        { n: 1, actor: 'Store', action: 'dispatch TRANSFER_OWNERSHIP', detail: 'Reports through onResult.', file: 'js/remote-store.js' },
+        { n: 2, actor: 'Database', action: 'transfer_ownership()', detail: 'Demotes the caller and promotes a named member, both of whom must already be in the group.', file: 'supabase/schema.sql' },
+      ],
+      invariants: ['There is exactly one owner before and after.'],
       failureModes: [
-        { case: 'groupId does not exist', handling: '{ok:false, error:"Group not found."}' },
-        { case: 'empty name', handling: '{ok:false, error:"Member name is required."}' },
+        { case: 'The target is not a member', handling: '"That person is not in this group."' },
+        { case: 'A non-owner attempts it', handling: '"Only the current owner can hand over a group."' },
+      ],
+    },
+    {
+      id: 'leave-group',
+      stage: 'assemble',
+      kind: 'branch',
+      title: 'Leave a group',
+      trigger: 'A member removes their own membership.',
+      purpose: 'Exit a group you are finished with.',
+      steps: [
+        { n: 1, actor: 'Database', action: 'guard_membership_removal()', detail: 'A before-delete trigger that refuses if the member appears in any expense, or if they are the last owner.', file: 'supabase/schema.sql' },
+      ],
+      invariants: [
+        'Nobody can walk away from a debt: appearing in any expense blocks leaving.',
+        'A group can never be left ownerless.',
+      ],
+      failureModes: [
+        { case: 'They appear in an expense', handling: '"This person appears in an expense. Settle up and delete their expenses first, or delete the group."' },
+        { case: 'They are the only owner', handling: '"You own this group. Hand ownership to someone else or delete the group."' },
       ],
     },
     {
       id: 'remove-member',
-      title: 'Remove a member from a group',
-      trigger: 'User clicks the remove button next to a member in the group view',
-      purpose: "Shrink a group's roster, but only when doing so can't silently orphan money already recorded against that member.",
+      stage: 'assemble',
+      kind: 'branch',
+      title: 'Remove somebody else',
+      trigger: 'The owner removes a member.',
+      purpose: 'Take out someone added by mistake.',
       steps: [
-        { n: 1, actor: 'View', action: 'dispatch REMOVE_MEMBER', detail: 'dispatch({type:"REMOVE_MEMBER", payload:{groupId, memberId}}).', file: 'js/app.js' },
-        { n: 2, actor: 'Store', action: 'handlers.REMOVE_MEMBER', detail: 'Confirms the group and member exist, then scans state.expenses for any record in this group where the member is either paidBy or listed in participants.', file: 'js/store.js' },
-        { n: 3, actor: 'Store', action: 'Reject if the member is used', detail: 'If the member appears in any existing expense or settlement (as payer or participant), the removal is rejected outright - nothing is mutated.', file: 'js/store.js' },
-        { n: 4, actor: 'Store', action: 'Commit', detail: 'Otherwise filters the member out of group.members, calls adoptCurrentUserFor(group) in case the removed member was the current user, appends an activity item.', file: 'js/store.js' },
+        { n: 1, actor: 'Store', action: 'dispatch REMOVE_MEMBER', detail: 'The local store calls the field memberId and the remote store userId; the view sends both so there is one call site.', file: 'js/app.js' },
+        { n: 2, actor: 'Database', action: 'Delete policy plus the guard', detail: 'The policy allows removing yourself or, as owner, anyone; the trigger still refuses if they appear in an expense.', file: 'supabase/schema.sql' },
       ],
-      invariants: [
-        'a member can never be removed while any expense or settlement in the group still references their id',
-        'after a successful removal, ui.currentUserId is re-pointed at group.members[0] if it was the removed member',
-      ],
-      failureModes: [
-        { case: 'groupId does not exist', handling: '{ok:false, error:"Group not found."}' },
-        { case: 'memberId is not a member of that group', handling: '{ok:false, error:"Member not found."}' },
-        { case: 'the member appears in an existing expense (as payer or participant)', handling: '{ok:false, error:"Cannot remove " + name + " - they appear in an existing expense."} - the member and every expense are left untouched.' },
-      ],
+      invariants: ['The same debt guard applies however the removal is initiated.'],
+      failureModes: [{ case: 'They appear in an expense', handling: 'Refused with the same message as leaving.' }],
     },
+    {
+      id: 'add-member-demo',
+      stage: 'assemble',
+      kind: 'branch',
+      title: 'Add a member by name (demo only)',
+      trigger: 'The "+ Member" button, which only appears in demo mode.',
+      purpose: 'Let the demo have several people without inventing accounts.',
+      steps: [
+        { n: 1, actor: 'Store', action: 'dispatch ADD_MEMBER', detail: 'Local store only. In shared mode the same action returns "Members join with an invite code."', file: 'js/store.js' },
+      ],
+      invariants: ['In shared mode a member is always a real account.'],
+      failureModes: [{ case: 'Dispatched in shared mode', handling: 'Refused with an explanation rather than silently ignored.' }],
+    },
+
+    // ---------------- stage 5: record ----------------
     {
       id: 'add-expense',
+      stage: 'record',
+      kind: 'branch',
       title: 'Add an expense',
-      trigger: 'User submits the Add/Edit expense modal in "add" mode',
-      purpose: 'Record a shared expense together with how it should be split.',
+      trigger: 'The Add expense form is submitted, or "n" is pressed.',
+      purpose: 'Record one payment and how it divides.',
       steps: [
-        { n: 1, actor: 'View', action: 'Collect form fields', detail: 'Description, amount text, payer, category, date, split-mode tab, and per-participant checkboxes/values.', file: 'js/app.js' },
-        { n: 2, actor: 'Model', action: 'parseAmount(amountText)', detail: 'Converts the typed amount ("12,50", "€12.50", ...) into integer cents, or null if unparseable.', file: 'js/model.js' },
-        { n: 3, actor: 'View', action: 'dispatch ADD_EXPENSE', detail: 'dispatch({type:"ADD_EXPENSE", payload:{groupId, description, amountCents, paidBy, splitMode, participants, category, date, note}}).', file: 'js/app.js' },
-        { n: 4, actor: 'Store', action: 'handlers.ADD_EXPENSE', detail: 'Builds a draft object and calls SW.Model.validateExpense(draft, group).', file: 'js/store.js' },
-        { n: 5, actor: 'Model', action: 'validateExpense', detail: 'Checks description, amountCents > 0, paidBy is a member, at least one participant who is all a member, and that no memberId appears twice in participants. It does NOT re-implement the mode-specific sum/sign rules itself - it delegates to splitExpense(amountCents, splitMode, participants) and surfaces that error, so the validator and the allocator can never disagree.', file: 'js/model.js' },
-        { n: 6, actor: 'Store', action: 'Commit or reject', detail: 'If invalid, returns {ok:false, error} without mutating state. If valid, pushes a new Expense (type:"expense"), appends an activity item, persists, notifies.', file: 'js/store.js' },
+        { n: 1, actor: 'Model', action: 'parseAmount()', detail: 'Text to integer cents; null when it is not a number.', file: 'js/model.js' },
+        { n: 2, actor: 'Model', action: 'validateExpense()', detail: 'Description, positive amount, payer in the group, at least one participant, no duplicates, and the mode rules via splitExpense.', file: 'js/model.js' },
+        { n: 3, actor: 'Store', action: 'Optimistic apply', detail: 'Cached, rendered and returned {ok:true} synchronously.', file: 'js/remote-store.js' },
+        { n: 4, actor: 'Database', action: 'create_expense()', detail: 'Re-validates and writes both tables in one transaction.', file: 'supabase/schema.sql' },
       ],
-      invariants: [
-        'every stored Expense passes SW.Model.validateExpense against its own group',
-        'amountCents is always a positive integer',
-      ],
+      invariants: ['The shares always add up to the amount, in both layers.'],
       failureModes: [
-        { case: 'percent split does not sum to 100% (tolerance PERCENT_TOLERANCE = 0.0100001, i.e. ~±0.01)', handling: 'splitExpense returns {ok:false, error}; validateExpense surfaces it; dispatch returns {ok:false}; nothing is persisted; the modal shows the message.' },
-        { case: 'payer is not a member of the group', handling: 'same - rejected before any mutation.' },
-        { case: 'the same memberId appears twice in participants', handling: 'validateExpense adds "Each participant may only be listed once." before splitExpense is even called.' },
-        { case: 'amount field does not parse (parseAmount returns null)', handling: 'js/app.js passes amountCents:null straight through in the ADD_EXPENSE payload; validateExpense rejects it (Number.isInteger(null) is false) with "Amount must be a positive whole number of cents."' },
-      ],
-    },
-    {
-      id: 'edit-expense',
-      title: 'Edit an existing expense',
-      trigger: 'User clicks the edit button on an expense/settlement row, then submits the same modal used for "Add an expense"',
-      purpose: 'Change any field of an already-recorded expense (description, amount, payer, split, category, date, note) while re-validating it exactly as strictly as a brand-new one.',
-      steps: [
-        { n: 1, actor: 'View', action: 'openExpenseModal(group, expense)', detail: 'The same modal as "Add an expense" opens pre-filled from the existing record and sets ui.editingExpenseId = expense.id, which is what tells the submit handler to dispatch UPDATE_EXPENSE instead of ADD_EXPENSE.', file: 'js/app.js' },
-        { n: 2, actor: 'View', action: 'dispatch UPDATE_EXPENSE', detail: 'dispatch({type:"UPDATE_EXPENSE", payload:{expenseId, patch:{description, amountCents, paidBy, splitMode, participants, category, date, note}}}) - patch carries the full current form state, not a sparse diff.', file: 'js/app.js' },
-        { n: 3, actor: 'Store', action: 'handlers.UPDATE_EXPENSE', detail: 'Looks the expense (and its group) up by id; builds a draft that takes each of description/amountCents/paidBy/splitMode/participants from patch when patch defines it, otherwise falls back to the expense\'s current value.', file: 'js/store.js' },
-        { n: 4, actor: 'Model', action: 'validateExpense(draft, group)', detail: 'The exact same validation used by ADD_EXPENSE runs against the merged draft.', file: 'js/model.js' },
-        { n: 5, actor: 'Store', action: 'Commit or reject', detail: 'If invalid, returns {ok:false, error} and the stored expense is untouched. If valid, overwrites the expense\'s description/amountCents/paidBy/splitMode/participants in place, and conditionally overwrites category/date/note only if patch defines them; appends an activity item ("Updated \\"...\\"."); persists; notifies.', file: 'js/store.js' },
-      ],
-      invariants: [
-        'the edited expense keeps its original id, groupId, type and createdAt',
-        'an edited expense passes SW.Model.validateExpense against its group just like a newly-added one',
-      ],
-      failureModes: [
-        { case: 'expenseId does not exist (e.g. deleted in another tab)', handling: '{ok:false, error:"Expense not found."}' },
-        { case: 'the edited draft fails validateExpense (bad amount, non-member payer, bad split sums, duplicate participant, ...)', handling: '{ok:false, error} - the stored expense is left exactly as it was; the modal shows the message.' },
+        { case: 'Amount does not parse', handling: 'amountCents is null and validateExpense refuses; nothing is sent.' },
+        { case: 'The server rejects it', handling: 'The optimistic row is removed and the banner shows the server\'s reason.' },
       ],
     },
     {
       id: 'split-calculation',
-      title: 'Split calculation',
-      trigger: "Any time shares must be derived from an expense's (amountCents, splitMode, participants) - the live preview in the expense modal, and every computeBalances pass",
-      purpose: 'Turn an amount plus a split mode into exact per-member cent shares that always sum to the total, with no floating-point drift.',
+      stage: 'record',
+      kind: 'branch',
+      title: 'Divide the amount',
+      trigger: 'Any time shares must be derived - the live preview, and every balance calculation.',
+      purpose: 'Turn an amount plus a mode plus participants into whole cents that add up exactly.',
       steps: [
-        { n: 1, actor: 'Model', action: 'splitExpense(amountCents, splitMode, participants)', detail: 'Every mode reduces to a non-negative weight per participant: 1 for "equal", the supplied share count for "shares", the supplied percentage for "percent", and the supplied cent value for "exact". Mode-specific validation runs first (finiteness, sign, sum-to-100 for percent, sum-to-amountCents for exact), then ALL modes - "exact" included - are handed to the same allocateLargestRemainder(amountCents, raw) helper, so exact mode can no longer round each person\'s share independently and miss the total.', file: 'js/model.js' },
-        { n: 2, actor: 'Model', action: 'Floor + largest-remainder', detail: 'Computes each participant\'s exact real-valued share (raw), floors it, sums the floors, and hands the few leftover cents one at a time to the participants with the largest fractional remainder (ties broken by participant order).', file: 'js/model.js' },
+        { n: 1, actor: 'Model', action: 'Reduce to weights', detail: 'Equal is all ones; shares and percent use the given values; exact is already in cents.', file: 'js/model.js' },
+        { n: 2, actor: 'Model', action: 'allocateLargestRemainder()', detail: 'Everyone gets their floor; leftover cents go one each to the largest fractional remainders, ties by input order.', file: 'js/model.js' },
       ],
       invariants: [
-        'sum(shareCents) === amountCents exactly, for every split mode, including "exact"',
-        'every shareCents value is an integer',
+        'sum(shares) === amountCents, in all four modes.',
+        'Deterministic: the same input always produces the same division.',
       ],
       failureModes: [
-        { case: 'exact values are negative, non-finite, or do not sum to amountCents (±0.5 cent tolerance)', handling: '{ok:false, error}' },
-        { case: 'percent values are negative, non-finite, or do not sum to 100 (tolerance PERCENT_TOLERANCE = 0.0100001, i.e. ~±0.01)', handling: '{ok:false, error}' },
-        { case: 'a shares value is non-finite or <= 0', handling: '{ok:false, error}' },
+        { case: 'Non-finite or negative values', handling: 'Rejected before any allocation.' },
+        { case: 'Percentages off by more than the tolerance', handling: 'Rejected with the actual sum.' },
+      ],
+      edgeCases: [
+        { case: 'Exact mode used to round each value on its own', handling: 'Fixed: all four modes now share one allocator. Previously 1.00 split as 33.5/33.5/33 paid out 1.01 and broke the zero-sum invariant.', status: 'handled' },
       ],
     },
     {
-      id: 'compute-balances',
-      title: 'Compute group balances',
-      trigger: "Rendering a group's balances panel, and internally by memberBalanceSummary/groupTotals-adjacent UI",
-      purpose: "Derive every member's net position (creditor/debtor) in a group from its expenses and settlements.",
+      id: 'edit-expense',
+      stage: 'record',
+      kind: 'branch',
+      title: 'Edit an expense',
+      trigger: 'The pencil icon on an expense row.',
+      purpose: 'Correct a wrong amount, payer or split.',
       steps: [
-        { n: 1, actor: 'Model', action: 'computeBalances(groupId, groups, expenses)', detail: 'Starts every member of the group at 0.', file: 'js/model.js' },
-        { n: 2, actor: 'Model', action: 'Apply each expense/settlement', detail: 'Calls splitExpense to get that record\'s shares; credits paidBy +amountCents; debits each participant -shareCents. A record whose split fails is skipped entirely, so credits and debits can never drift out of balance.', file: 'js/model.js' },
+        { n: 1, actor: 'View', action: 'Modal in edit mode', detail: 'Pre-filled from the stored expense, keyed by ui.editingExpenseId.', file: 'js/app.js' },
+        { n: 2, actor: 'Store', action: 'dispatch UPDATE_EXPENSE', detail: 'Optimistic, keeping the previous version for rollback.', file: 'js/remote-store.js' },
+        { n: 3, actor: 'Database', action: 'update_expense()', detail: 'Re-validates, and refuses if updated_at does not match the version the editor started from.', file: 'supabase/schema.sql' },
       ],
-      invariants: [
-        'every member of the group appears as a key, even at 0',
-        'sum of all balances is exactly 0',
-      ],
+      invariants: ['An edit either applies completely or not at all - the expense and its participants move together.'],
       failureModes: [
-        { case: 'groupId does not exist', handling: 'returns {} (an empty balances object).' },
-      ],
-    },
-    {
-      id: 'simplify-debts',
-      title: 'Simplify debts',
-      trigger: "Balances panel building its 'Suggested settlements' list, or memberBalanceSummary computing owes/owed",
-      purpose: 'Reduce a web of pairwise debts to the smallest possible set of point-to-point transfers.',
-      steps: [
-        { n: 1, actor: 'Model', action: 'simplifyDebts(balances)', detail: 'Builds a working list of {id, amount} for every member with a non-zero balance.', file: 'js/model.js' },
-        { n: 2, actor: 'Model', action: 'Greedy match loop', detail: 'Repeatedly sorts by amount desc (ties by memberId), matches the largest creditor with the largest debtor, transfers min(credit, |debt|) between them, drops whichever side hit zero, and repeats until nobody is left.', file: 'js/model.js' },
-      ],
-      invariants: [
-        'every returned amountCents is > 0',
-        'applying every returned transfer back onto the input balances zeroes all of them',
-        'at most n-1 transfers for n members with a non-zero balance',
-        'output ordering is fully deterministic for the same input',
-      ],
-      failureModes: [
-        { case: 'balances are already all zero', handling: 'returns an empty array immediately.' },
-      ],
-    },
-    {
-      id: 'settle-up',
-      title: 'Settle up',
-      trigger: 'User submits the "Settle up" modal, or clicks "Record" on a suggested settlement',
-      purpose: 'Log a direct payment between two members as a special Expense (type:"settlement").',
-      steps: [
-        { n: 1, actor: 'View', action: 'Collect/prefill fields', detail: 'From, to, amount, date - prefilled from a suggested settlement when triggered via "Record".', file: 'js/app.js' },
-        { n: 2, actor: 'View', action: 'dispatch ADD_SETTLEMENT', detail: 'dispatch({type:"ADD_SETTLEMENT", payload:{groupId, from, to, amountCents, date}}).', file: 'js/app.js' },
-        { n: 3, actor: 'Store', action: 'handlers.ADD_SETTLEMENT', detail: 'Confirms from and to are two distinct members of the group and amountCents is a positive integer.', file: 'js/store.js' },
-        { n: 4, actor: 'Store', action: 'Commit', detail: 'Appends an Expense with type:"settlement", splitMode:"exact", participants:[{memberId:to, value:amountCents}], paidBy:from; appends an activity item; persists; notifies.', file: 'js/store.js' },
-      ],
-      invariants: [
-        'a settlement always has exactly one participant (the receiver), whose value equals amountCents',
-        'settlements feed into computeBalances exactly like ordinary expenses',
-      ],
-      failureModes: [
-        { case: 'from === to', handling: '{ok:false, error:"A settlement needs two different members."}' },
-        { case: 'from or to is not a member of the group', handling: '{ok:false, error}' },
-        { case: 'amountCents is not a positive integer', handling: '{ok:false, error}' },
+        { case: 'Someone else edited it first', handling: '"Somebody else changed this expense while you were editing it. Reload and try again."' },
+        { case: 'The expense was deleted meanwhile', handling: '"That expense no longer exists."' },
       ],
     },
     {
       id: 'delete-expense',
-      title: 'Delete an expense or settlement',
-      trigger: 'User confirms delete on an expense/settlement row',
-      purpose: 'Remove a single record from a group, with an Undo available via the toast.',
+      stage: 'record',
+      kind: 'branch',
+      title: 'Delete an expense, with undo',
+      trigger: 'The bin icon on an expense row.',
+      purpose: 'Remove a mistake without a confirmation dialog for every small thing.',
       steps: [
-        { n: 1, actor: 'View', action: 'dispatch DELETE_EXPENSE', detail: 'dispatch({type:"DELETE_EXPENSE", payload:{expenseId}}); the view keeps a copy of the deleted record for its Undo toast (Undo re-adds it via ADD_EXPENSE/ADD_SETTLEMENT-equivalent data, entirely a view-layer concern).', file: 'js/app.js' },
-        { n: 2, actor: 'Store', action: 'handlers.DELETE_EXPENSE', detail: 'Looks the expense up by id across all groups; returns {ok:false} if it no longer exists.', file: 'js/store.js' },
-        { n: 3, actor: 'Store', action: 'Commit', detail: 'Filters it out of state.expenses, appends an activity item (kind "expense" or "settlement"), persists, notifies.', file: 'js/store.js' },
+        { n: 1, actor: 'Store', action: 'dispatch DELETE_EXPENSE', detail: 'Optimistic removal.', file: 'js/remote-store.js' },
+        { n: 2, actor: 'View', action: 'Undo toast', detail: 'Re-adds the expense through the normal create path if pressed.', file: 'js/app.js' },
       ],
-      invariants: ["deleting one expense never touches other expenses or the group's member list"],
+      invariants: ['Undo reports honestly: it says "Restored" only when the restore actually succeeded.'],
       failureModes: [
-        { case: 'expenseId does not exist (e.g. already deleted)', handling: '{ok:false, error:"Expense not found."} - nothing removed.' },
+        { case: 'The restore fails validation', handling: 'For example a participant left the group meanwhile. The real error is shown instead of a false "Restored".' },
+      ],
+      edgeCases: [
+        { case: 'Undo does not restore the original record', handling: 'It creates a new expense with a new id and a new createdAt, so the entry re-sorts to the top of its date group instead of returning to where it was.', status: 'known-gap' },
+        { case: 'The undo lives in a toast', handling: 'The toast stays longer when it carries an action and can be dismissed, but a slow reader can still lose the chance.', status: 'known-gap' },
       ],
     },
     {
-      id: 'persistence',
-      title: 'Persistence to localStorage',
-      trigger: 'Every dispatch() call whose handler returns {ok:true}, plus explicit reset()/seedDemo()',
-      purpose: 'Keep localStorage in sync with in-memory state without ever letting a storage failure break the app.',
+      id: 'validation-rejection',
+      stage: 'record',
+      kind: 'branch',
+      title: 'A write is refused',
+      trigger: 'Any invalid expense, in the browser or at the database.',
+      purpose: 'Refuse bad data in a way that tells the person what to change.',
       steps: [
-        { n: 1, actor: 'Store', action: 'dispatch() routes the action', detail: 'Looks up handlers[action.type] using Object.prototype.hasOwnProperty.call(handlers, action.type) rather than a plain handlers[action.type] lookup, so an action.type like "toString" or "constructor" cannot resolve to an inherited Object.prototype function instead of a real handler. Also checks that the handler actually returned an object with a boolean .ok before treating the result as valid.', file: 'js/store.js' },
-        { n: 2, actor: 'Store', action: 'persist()', detail: "JSON.stringify(state) into localStorage['splitwise.state.v1'], wrapped in try/catch.", file: 'js/store.js' },
-        { n: 3, actor: 'Store', action: 'notify()', detail: 'Hands every subscriber a deep copy of the new state (structuredClone, with a JSON round-trip fallback).', file: 'js/store.js' },
+        { n: 1, actor: 'Model', action: 'validateExpense()', detail: 'Fast, local, and phrased for a person.', file: 'js/model.js' },
+        { n: 2, actor: 'Database', action: 'assert_expense_valid()', detail: 'The authority. Runs on create and update, and cannot be bypassed by talking to the API directly.', file: 'supabase/schema.sql' },
+        { n: 3, actor: 'View', action: 'Message plus banner', detail: 'Inline in the form when it is a form error; a persistent banner when a background write failed.', file: 'js/app.js' },
+      ],
+      invariants: ['The client and the database enforce the same rules; the client exists for speed and tone, not for safety.'],
+      failureModes: [
+        { case: 'Only the client had validated', handling: 'That was the situation until recently: the API accepted a 100.00 expense split into 10.00 + 20.00. The rules now live in the database.' },
+      ],
+    },
+    {
+      id: 'edit-conflict',
+      stage: 'record',
+      kind: 'branch',
+      title: 'Two people edit at once',
+      trigger: 'Two members submit edits to the same expense.',
+      purpose: 'Refuse the second write rather than letting it silently erase the first.',
+      steps: [
+        { n: 1, actor: 'Store', action: 'Send the version seen', detail: 'The updated_at the editor loaded is sent as p_expected_updated_at.', file: 'js/remote-store.js' },
+        { n: 2, actor: 'Database', action: 'Compare and refuse', detail: 'A mismatch raises rather than overwriting.', file: 'supabase/schema.sql' },
+        { n: 3, actor: 'View', action: 'Roll back and explain', detail: 'The optimistic change reverts and the banner asks the user to reload.', file: 'js/app.js' },
+      ],
+      invariants: ['An edit is only ever applied on top of the version its author actually saw.'],
+      failureModes: [
+        { case: 'Realtime has not yet delivered the other change', handling: 'The refusal still fires; the check is on the server, not on what the client happens to know.' },
+      ],
+    },
+
+    // ---------------- stages 6-8 ----------------
+    {
+      id: 'compute-balances',
+      stage: 'reconcile',
+      kind: 'branch',
+      title: 'Compute balances',
+      trigger: 'Every render of a group, and every integrity check.',
+      purpose: 'Reduce a list of expenses to one number per person.',
+      steps: [
+        { n: 1, actor: 'Model', action: 'Seed every member at zero', detail: 'So people with no activity still appear.', file: 'js/model.js' },
+        { n: 2, actor: 'Model', action: 'Credit the payer, debit the shares', detail: 'For every expense and settlement in the group.', file: 'js/model.js' },
+      ],
+      invariants: ['The values always sum to exactly zero.', 'A record that cannot be split is skipped whole, never half-applied.'],
+      failureModes: [{ case: 'A malformed record', handling: 'Skipped, and surfaced by the admin integrity check as counted-but-not-applied.' }],
+    },
+    {
+      id: 'simplify-debts',
+      stage: 'minimise',
+      kind: 'branch',
+      title: 'Minimise the number of payments',
+      trigger: 'Rendering the suggested settlements.',
+      purpose: 'Fewest transfers that clear every balance.',
+      steps: [
+        { n: 1, actor: 'Model', action: 'Sort and match', detail: 'Largest creditor against largest debtor, transfer the smaller magnitude, drop anyone at zero, repeat.', file: 'js/model.js' },
+      ],
+      invariants: ['At most n-1 transfers.', 'Applying them all zeroes everyone.'],
+      failureModes: [{ case: 'All balances already zero', handling: 'Returns an empty list and the panel says everyone is settled.' }],
+    },
+    {
+      id: 'settle-up',
+      stage: 'settle',
+      kind: 'branch',
+      title: 'Record a settlement',
+      trigger: 'The Settle up form.',
+      purpose: 'Log a real payment between two people.',
+      steps: [
+        { n: 1, actor: 'Store', action: 'dispatch ADD_SETTLEMENT', detail: 'Becomes an expense of type "settlement" with the receiver as the only participant.', file: 'js/remote-store.js' },
+        { n: 2, actor: 'Database', action: 'create_expense()', detail: 'The same validated path as any expense.', file: 'supabase/schema.sql' },
+      ],
+      invariants: ['A settlement changes exactly two balances.'],
+      failureModes: [{ case: 'Payer and receiver are the same person', handling: 'Refused - it would be a no-op record.' }],
+    },
+    {
+      id: 'record-suggested',
+      stage: 'settle',
+      kind: 'branch',
+      title: 'Record a suggested settlement',
+      trigger: 'The Record button beside a suggestion.',
+      purpose: 'Turn the computed suggestion into a stored fact in one click.',
+      steps: [
+        { n: 1, actor: 'View', action: 'Recompute, then dispatch', detail: 'The suggestions are recomputed at click time so a stale index cannot record the wrong payment.', file: 'js/app.js' },
+      ],
+      invariants: ['Recording every suggestion in turn leaves the group at all zeroes.'],
+      failureModes: [{ case: 'Balances changed since the render', handling: 'The recomputation means the button acts on current data, not on what was on screen.' }],
+    },
+
+    // ---------------- cross-cutting ----------------
+    {
+      id: 'persistence',
+      stage: null,
+      kind: 'cross-cutting',
+      title: 'Where the data lives',
+      trigger: 'Every successful mutation.',
+      purpose: 'Keep the books after the tab closes.',
+      steps: [
+        { n: 1, actor: 'Store', action: 'localStorage (demo)', detail: 'The whole state as JSON under splitwise.state.v1, every access guarded.', file: 'js/store.js' },
+        { n: 2, actor: 'Store', action: 'Supabase (shared)', detail: 'Rows in Postgres; the client keeps a cache and reconciles against it.', file: 'js/remote-store.js' },
+      ],
+      invariants: ['A corrupt or unsupported stored blob is rejected rather than allowed to half-load.'],
+      failureModes: [
+        { case: 'Storage full or disabled', handling: 'Caught; the session continues in memory.' },
+        { case: 'A newer state version', handling: 'Rejected, falling back to demo data. There is no migration path.' },
+      ],
+    },
+    {
+      id: 'optimistic-writes',
+      stage: null,
+      kind: 'cross-cutting',
+      title: 'Optimistic writes and rollback',
+      trigger: 'Every mutating action in shared mode.',
+      purpose: 'Feel instant on a slow connection without lying about what was saved.',
+      steps: [
+        { n: 1, actor: 'Store', action: 'Validate, apply, notify, return', detail: 'All synchronous, so the view updates in the same frame.', file: 'js/remote-store.js' },
+        { n: 2, actor: 'Store', action: 'Write in the background', detail: 'Then reconcile the temporary id, or roll the cache back and report.', file: 'js/remote-store.js' },
+      ],
+      invariants: ['The cache never keeps something the server rejected.'],
+      failureModes: [
+        { case: 'The rollback happens after the user has moved on', handling: 'The banner persists rather than a toast, so the failure is still visible later.' },
+      ],
+      edgeCases: [
+        { case: 'dispatch() reports "ok" before the server has agreed', handling: 'Deliberate, and the reason joining had to be excluded from it: for an action that cannot be applied locally, an immediate "ok" is a lie. Joining reports through a callback instead.', status: 'handled' },
+      ],
+    },
+    {
+      id: 'realtime-sync',
+      stage: null,
+      kind: 'cross-cutting',
+      title: 'Seeing a friend\'s changes',
+      trigger: 'Any row change in a group you belong to.',
+      purpose: 'Two people on the same trip should not have to refresh.',
+      steps: [
+        { n: 1, actor: 'Store', action: 'Subscribe', detail: 'One channel across expenses, participants, memberships and groups.', file: 'js/remote-store.js' },
+        { n: 2, actor: 'Store', action: 'Debounced refetch', detail: 'Roughly 300ms, so a burst of related row events causes one refetch.', file: 'js/remote-store.js' },
+      ],
+      invariants: ['Realtime is subject to the same row-level security as any read; it cannot leak another group.'],
+      failureModes: [{ case: 'The socket drops', handling: 'The client reconnects; a reload always recovers.' }],
+      edgeCases: [
+        { case: 'A refetch mid-edit', handling: 'The main panel re-renders and scroll is preserved, but focus and text selection are not.', status: 'known-gap' },
+      ],
+    },
+    {
+      id: 'security-model',
+      stage: null,
+      kind: 'cross-cutting',
+      title: 'Who can see and write what',
+      trigger: 'Every request, without exception.',
+      purpose: 'One group\'s finances must be invisible to everyone outside it.',
+      steps: [
+        { n: 1, actor: 'Database', action: 'is_group_member()', detail: 'A security definer helper, so a policy on group_members does not recurse into itself.', file: 'supabase/schema.sql' },
+        { n: 2, actor: 'Database', action: 'Policies per table', detail: 'Reads gated on membership; writes to expenses only through validated functions.', file: 'supabase/schema.sql' },
+        { n: 3, actor: 'Tests', action: 'tests/rls.test.js', detail: 'Runs the real schema against Postgres compiled to WebAssembly and attacks it as owner, friend and stranger.', file: 'tests/rls.test.js' },
       ],
       invariants: [
-        'a failed dispatch (ok:false) never calls persist() or notify()',
-        'getState() never returns a reference a caller could use to mutate the store\'s internals',
-        'an unknown or inherited-property action.type always yields {ok:false, error:"Unknown action type: ..."}, never an inherited function\'s return value',
+        'A stranger sees zero rows in every table - not a filtered view, nothing at all.',
+        'Nobody can self-promote to owner or add somebody else to a group.',
+        'The publishable key is safe in client code only because these policies constrain it.',
       ],
       failureModes: [
-        { case: 'localStorage.setItem throws (private mode, quota exceeded)', handling: 'caught and ignored - the app keeps running in-memory only, for the rest of that session.' },
-        { case: 'localStorage is undefined (e.g. running under Node)', handling: 'persist()/loadFromStorage() short-circuit to a no-op / null.' },
-        { case: 'action.type is not an own property of handlers (e.g. "toString", "constructor", or simply unrecognized)', handling: '{ok:false, error:"Unknown action type: " + action.type} - nothing is mutated, persisted, or notified.' },
-        { case: 'a handler returns something other than {ok: boolean, ...}', handling: 'dispatch returns {ok:false, error:"Handler for " + action.type + " returned no result."} instead of trusting the malformed result.' },
+        { case: 'A permissive self-insert on group_members', handling: 'Removed. It let anyone holding a group UUID add themselves with no invite code. It hid from testing because a RETURNING clause needs read rights and failed first, making the attack look blocked.' },
+      ],
+    },
+    {
+      id: 'language',
+      stage: null,
+      kind: 'cross-cutting',
+      title: 'English and German',
+      trigger: 'The EN/DE control, or the browser language on first visit.',
+      purpose: 'A German friend should not meet an English sign-up form.',
+      steps: [
+        { n: 1, actor: 'Presentation', action: 'SW.I18n.t()', detail: '204 keys per language, full parity, with a fallback chain that never renders "undefined".', file: 'js/i18n.js' },
+        { n: 2, actor: 'Presentation', action: 'applyStatic()', detail: 'Walks data-i18n attributes for markup that is not re-rendered.', file: 'js/i18n.js' },
+        { n: 3, actor: 'View', action: 'Re-render on change', detail: 'Money becomes "12,50 €" and dates "3. Sep 2026" in German.', file: 'js/app.js' },
+      ],
+      invariants: [
+        'Formatting is a display concern only: SW.Model.formatMoney and the cent arithmetic are untouched by language.',
+        'A missing key falls back to English, then to the key itself, rather than throwing.',
+      ],
+      failureModes: [{ case: 'localStorage unavailable', handling: 'The choice simply does not persist.' }],
+      edgeCases: [
+        { case: 'The admin console is English only', handling: 'Deliberate. It is developer documentation, not something a friend will open.', status: 'handled' },
+        { case: 'Error text from Supabase and from js/model.js', handling: 'Passed through untranslated; only the surrounding sentence is localised.', status: 'known-gap' },
       ],
     },
     {
       id: 'import-export',
-      title: 'Import / export state',
-      trigger: 'User clicks "Export JSON", or chooses a file via "Import JSON"',
-      purpose: 'Move the whole app state in and out as a single JSON file, for backup or transfer between devices.',
+      stage: null,
+      kind: 'cross-cutting',
+      title: 'Export and import (demo only)',
+      trigger: 'The Data menu.',
+      purpose: 'Get demo data out, and back in.',
       steps: [
-        { n: 1, actor: 'Store', action: 'exportJSON()', detail: 'Returns JSON.stringify(state, null, 2); the view wraps it in a Blob and triggers a download.', file: 'js/store.js' },
-        { n: 2, actor: 'View', action: 'Read the chosen file', detail: 'Reads the file\'s text and calls SW.Store.importJSON(text).', file: 'js/app.js' },
-        { n: 3, actor: 'Store', action: 'importJSON(str)', detail: 'JSON.parses the string (catching parse errors), then dispatches IMPORT_STATE with the parsed object.', file: 'js/store.js' },
-        { n: 4, actor: 'Store', action: 'handlers.IMPORT_STATE', detail: 'Runs validateStateShape (version === 1; groups/expenses/activity arrays present; every group/expense has the required fields) before ever replacing the live state.', file: 'js/store.js' },
-        { n: 5, actor: 'Store', action: 'adoptCurrentUserFor(imported current group)', detail: 'After replacing state with the deep-cloned imported candidate, re-points ui.currentUserId at that group\'s first member if the imported currentUserId isn\'t one of its members - an imported file can easily carry a currentUserId that doesn\'t belong to its own currentGroupId.', file: 'js/store.js' },
+        { n: 1, actor: 'Store', action: 'exportJSON()', detail: 'The whole state, pretty-printed, downloaded as a file.', file: 'js/store.js' },
+        { n: 2, actor: 'Store', action: 'importJSON()', detail: 'Validates the shape and version before replacing anything.', file: 'js/store.js' },
       ],
-      invariants: [
-        'state is only ever replaced by a candidate that passed validateStateShape',
-        'a rejected import leaves the current state completely untouched',
-        'after a successful import, ui.currentUserId is a member of ui.currentGroupId\'s group whenever that group has members',
-      ],
-      failureModes: [
-        { case: 'the chosen file is not valid JSON', handling: 'importJSON returns {ok:false, error:"That file is not valid JSON."}' },
-        { case: 'valid JSON but the wrong shape/version', handling: 'IMPORT_STATE returns {ok:false, error} from validateStateShape; state is unchanged.' },
+      invariants: ['A malformed file can never partially overwrite good data.'],
+      failureModes: [{ case: 'Attempted in shared mode', handling: 'Refused - the data is not yours alone.' }],
+      edgeCases: [
+        { case: 'Shared data cannot be exported', handling: 'There is no export for a real group, so there is no backup a member can take with them.', status: 'known-gap' },
       ],
     },
     {
-      id: 'admin-auth',
-      title: 'Admin console login gate',
-      trigger: 'Loading admin.html in a new browser session, or submitting the admin password field',
-      purpose: 'Put a very simple, explicitly-not-secure speed bump in front of the admin/introspection console.',
+      id: 'admin-console',
+      stage: null,
+      kind: 'cross-cutting',
+      title: 'This console',
+      trigger: 'Opening admin.html and entering the demo code.',
+      purpose: 'Show the app\'s own logic, and check that the live data still obeys it.',
       steps: [
-        { n: 1, actor: 'View', action: 'Check sessionStorage on load', detail: 'If sessionStorage["splitwise.admin"] === "1", skip straight to the console.', file: 'js/admin.js' },
-        { n: 2, actor: 'View', action: 'Compare password on submit', detail: 'Compares the typed value to the literal string "123".', file: 'js/admin.js' },
-        { n: 3, actor: 'View', action: 'Grant or deny', detail: 'On match: sets sessionStorage["splitwise.admin"] = "1" and reveals the console. On mismatch: shakes the card and shows an error; the session stays locked.', file: 'js/admin.js' },
-        { n: 4, actor: 'View', action: 'Log out', detail: 'Clears sessionStorage["splitwise.admin"], returning to the gate.', file: 'js/admin.js' },
+        { n: 1, actor: 'Admin', action: 'Demo gate', detail: 'The code is 123, checked in the browser. The page states plainly that this is not security.', file: 'js/admin.js' },
+        { n: 2, actor: 'Admin', action: 'Render from SW.Workflows', detail: 'Every diagram is generated from this file, so the documentation cannot drift from itself.', file: 'js/admin.js' },
+        { n: 3, actor: 'Admin', action: 'Integrity checks', detail: 'Genuinely re-run against live state: balances sum to zero, no record skipped, no orphans, no duplicate ids.', file: 'js/admin.js' },
       ],
-      invariants: [
-        'the check is purely client-side and the UI states this plainly - it is a demo gate, not real authentication',
-        'the gate re-appears on every new browser session, since it uses sessionStorage rather than localStorage',
-      ],
-      failureModes: [
-        { case: 'wrong password', handling: 'the card shakes and shows an error message; sessionStorage is left untouched.' },
-      ],
-    },
-    {
-      id: 'set-current-user',
-      title: 'Set "who am I"',
-      trigger: 'User changes the current-user <select> in the header',
-      purpose: 'Tell the app which member is "you", so balances/activity can be framed as "you owe" / "you lent" instead of purely neutral figures.',
-      steps: [
-        { n: 1, actor: 'View', action: 'dispatch SET_CURRENT_USER', detail: 'dispatch({type:"SET_CURRENT_USER", payload:{memberId}}) on the select\'s change event.', file: 'js/app.js' },
-        { n: 2, actor: 'Store', action: 'handlers.SET_CURRENT_USER', detail: 'null/undefined memberId clears ui.currentUserId to null unconditionally. Otherwise, confirms memberId belongs to some member of some group in state.groups before accepting it.', file: 'js/store.js' },
-      ],
-      invariants: [
-        'ui.currentUserId is either null or the id of a member that exists in at least one group at the moment it is set',
-      ],
-      failureModes: [
-        { case: 'memberId does not match any member in any group', handling: '{ok:false, error:"Member not found."} - ui.currentUserId is left unchanged.' },
+      invariants: ['The integrity checks can actually fail - verified by pointing them at deliberately corrupted data.'],
+      failureModes: [{ case: 'SW.Workflows missing a field', handling: 'Degrades to a muted message rather than throwing.' }],
+      edgeCases: [
+        { case: 'The gate is cosmetic', handling: 'The code is readable in the source and bypassable in dev tools. It keeps a casual visitor out of a documentation page; it protects nothing. Live state shown here is only ever the viewer\'s own data, which row-level security already governs.', status: 'known-gap' },
+        { case: 'The activity feed is reconstructed, not recorded', handling: 'In shared mode there is no activity table; the feed is derived from current rows plus this session\'s actions, so it is not a real audit log.', status: 'known-gap' },
       ],
     },
   ];
 
-  // =========================================================================
-  // ALGORITHMS
-  // =========================================================================
+  // =======================================================================
+  // Data model
+  // =======================================================================
+
+  var DATA_MODEL = [
+    {
+      entity: 'profiles (db)',
+      fields: [
+        { name: 'id', type: 'uuid', note: 'Primary key, references auth.users.' },
+        { name: 'email', type: 'text', note: 'Copied from the auth user by a trigger.' },
+        { name: 'display_name', type: 'text', note: 'From full_name in the sign-up metadata. Not unique - see the identity gap.' },
+        { name: 'avatar_url', type: 'text', note: 'Unused by the current UI; initials are shown instead.' },
+      ],
+      relations: ['one per auth user', 'visible to anyone sharing a group with them'],
+    },
+    {
+      entity: 'groups (db)',
+      fields: [
+        { name: 'id', type: 'uuid', note: 'Primary key.' },
+        { name: 'name', type: 'text', note: '1-80 characters, constrained in the database.' },
+        { name: 'currency', type: 'text', note: 'EUR, USD, GBP or CHF. Fixed at creation.' },
+        { name: 'invite_code', type: 'text', note: 'Unique, 10 characters from a cryptographic source. Rotatable by the owner.' },
+        { name: 'created_by', type: 'uuid', note: 'Always auth.uid() - the function takes no caller-supplied id.' },
+      ],
+      relations: ['has many group_members', 'has many expenses'],
+    },
+    {
+      entity: 'group_members (db)',
+      fields: [
+        { name: 'group_id', type: 'uuid', note: 'Part of the composite key.' },
+        { name: 'user_id', type: 'uuid', note: 'Part of the composite key, so a duplicate join is impossible.' },
+        { name: 'role', type: 'text', note: 'owner or member. Owner rows are only ever written by create_group or transfer_ownership.' },
+      ],
+      relations: ['joins profiles to groups', 'the sole basis for every visibility decision'],
+    },
+    {
+      entity: 'expenses (db)',
+      fields: [
+        { name: 'id', type: 'uuid', note: 'Primary key.' },
+        { name: 'type', type: 'text', note: 'expense or settlement - both flow through the same arithmetic.' },
+        { name: 'amount_cents', type: 'bigint', note: 'Positive, capped below the point where JavaScript loses integer precision.' },
+        { name: 'paid_by', type: 'uuid', note: 'Must be a member, enforced by assert_expense_valid.' },
+        { name: 'split_mode', type: 'text', note: 'equal, exact, percent or shares.' },
+        { name: 'date', type: 'date', note: 'Constrained to a sane window.' },
+        { name: 'updated_at', type: 'timestamptz', note: 'Maintained by a trigger; carried by the client for conflict detection.' },
+      ],
+      relations: ['belongs to a group', 'has many expense_participants', 'writable only through create_expense / update_expense'],
+    },
+    {
+      entity: 'expense_participants (db)',
+      fields: [
+        { name: 'expense_id', type: 'uuid', note: 'Part of the composite key.' },
+        { name: 'user_id', type: 'uuid', note: 'Part of the composite key, so nobody can appear twice.' },
+        { name: 'value', type: 'numeric', note: 'Meaning depends on split_mode: cents for exact, a percentage, a share count, or ignored for equal.' },
+      ],
+      relations: ['belongs to an expense', 'written only inside the validated functions'],
+    },
+    {
+      entity: 'State (client)',
+      fields: [
+        { name: 'groups', type: 'Group[]', note: 'Each with members embedded, so the view needs no joins.' },
+        { name: 'expenses', type: 'Expense[]', note: 'camelCase mirror of the rows; settlements included.' },
+        { name: 'activity', type: 'ActivityItem[]', note: 'Real in demo mode; reconstructed in shared mode.' },
+        { name: 'ui', type: '{currentGroupId, currentUserId}', note: 'In shared mode currentUserId is always the signed-in account.' },
+      ],
+      relations: ['identical shape from both stores, which is what lets the view ignore which one is active'],
+    },
+  ];
+
+  // =======================================================================
+  // Algorithms
+  // =======================================================================
 
   var ALGORITHMS = [
     {
       id: 'largest-remainder',
       name: 'Largest-remainder cent allocation',
       problem:
-        'Split an integer number of cents across N participants, proportional to arbitrary ' +
-        'non-negative weights (equal shares, share counts, or percentages), without losing or ' +
-        'inventing a single cent to floating-point rounding. Every splitExpense mode - ' +
-        'including "exact" - funnels through this same allocator (allocateLargestRemainder), ' +
-        'so the caller-supplied per-person cent amounts in "exact" mode cannot make the shares ' +
-        'miss the total either.',
+        'Dividing an amount that does not divide evenly. 10.00 between three ' +
+        'people is 3.3333… each, and cents are indivisible - so somebody has to ' +
+        'get the extra cent, and the total must still come out at 10.00.',
       approach:
-        'For "equal"/"shares"/"percent", compute every participant\'s exact real-valued share ' +
-        '(amountCents * weight / totalWeight); for "exact", the caller-supplied cent values are ' +
-        'used as that same "raw" input directly (after confirming they sum to amountCents). ' +
-        'Floor each raw value to get a first-pass integer allocation - this can only ever ' +
-        'under-allocate, never over-allocate. The few cents left over (amountCents minus the ' +
-        'sum of the floors) are then handed out one at a time to the participants with the ' +
-        'largest fractional remainder, in order, breaking ties by original participant order. ' +
-        'This guarantees the final sum is exactly amountCents, and spreads the rounding "loss" ' +
-        'as fairly as possible.',
-      complexity: 'O(n log n) - dominated by sorting participants by fractional remainder.',
+        'Give everyone the floor of their exact share, then hand the leftover ' +
+        'cents out one at a time to whoever lost the most to flooring, ties broken ' +
+        'by input order. Every split mode funnels through this one function, ' +
+        'including exact mode - rounding each value separately is what previously ' +
+        'let a split of 1.00 pay out 1.01.',
+      complexity: 'O(n log n), dominated by sorting the remainders.',
       pseudocode:
-        'function largestRemainderSplit(amountCents, weights):\n' +
-        '  totalWeight = sum(weights)\n' +
-        '  raw[i] = amountCents * weights[i] / totalWeight   // exact, fractional\n' +
-        '  floor[i] = floor(raw[i])\n' +
-        '  remainder = amountCents - sum(floor)\n' +
-        '  order = indices sorted by (raw[i] - floor[i]) descending, ties by i ascending\n' +
-        '  for k in 0..remainder-1:\n' +
-        '    floor[order[k]] += 1\n' +
-        '  return floor   // sum(floor) === amountCents, always',
+        'raw[i]    = amountCents * weight[i] / totalWeight\n' +
+        'floors[i] = floor(raw[i])\n' +
+        'remainder = amountCents - sum(floors)\n' +
+        'order     = indices sorted by (raw[i] - floors[i]) descending, ties by i\n' +
+        'for k in 0 .. remainder-1:\n' +
+        '    floors[order[k]] += 1\n' +
+        'return floors            // sums to exactly amountCents',
       worked_example:
-        '€10.00 (1000 cents) split equally 3 ways -> raw shares 333.33/333.33/333.33 -> floors ' +
-        '333/333/333 (sum 999) -> 1 cent left over -> the first participant has the largest ' +
-        'remainder (tie broken by order) and gets it -> final shares 334/333/333 = 1000.',
+        '10.00 three ways: raw = 333.33 each, floors = 333/333/333 = 999, ' +
+        'remainder = 1 cent, all three fractions are equal so the tie goes to the ' +
+        'first participant. Result 3.34 / 3.33 / 3.33 = 10.00 exactly. Verified by ' +
+        'fuzzing 20,000 random splits across all four modes with no cent lost or invented.',
     },
     {
       id: 'min-cash-flow',
-      name: 'Greedy minimum cash-flow debt simplification',
+      name: 'Greedy minimum cash flow',
       problem:
-        "Given each member's net balance in a group, find a small set of point-to-point " +
-        'transfers that settles everyone to zero, instead of naively settling every ' +
-        'pairwise IOU that produced those balances.',
+        'Six people owing each other in a tangle should not mean fifteen ' +
+        'transfers. Given each person\'s net balance, find a short list of payments ' +
+        'that clears everyone.',
       approach:
-        'Repeatedly take the current largest creditor (most positive balance) and largest ' +
-        'debtor (most negative balance), transfer min(creditor\'s credit, debtor\'s debt) ' +
-        'between them, and drop whichever side hit exactly zero. Repeat until no non-zero ' +
-        'balances remain. Sorting is by balance descending, ties broken by memberId, so the ' +
-        'same input always produces the same output.',
-      complexity:
-        'O(n^2 log n) worst case (up to n-1 rounds, each re-sorting up to n remaining ' +
-        'entries) for n members - more than fast enough at Splitwise-clone group sizes.',
+        'Repeatedly match the largest creditor with the largest debtor and move ' +
+        'the smaller of the two amounts. One party hits zero and drops out each ' +
+        'round, so at most n-1 transfers are produced. Ordering is fixed - amount ' +
+        'descending, ties by member id - so the same balances always produce the ' +
+        'same suggestions on every device.',
+      complexity: 'O(n^2 log n) worst case; n is the size of a friend group.',
       pseudocode:
-        'function simplifyDebts(balances):\n' +
-        '  people = [{id, amount} for id, amount in balances if amount != 0]\n' +
-        '  transfers = []\n' +
-        '  while people is not empty:\n' +
-        '    sort people by amount descending, ties by id ascending\n' +
-        '    creditor = people[0]           // largest positive balance\n' +
-        '    debtor   = people[last]        // largest negative balance\n' +
+        'people = [{id, amount}] where amount != 0\n' +
+        'while people is not empty:\n' +
+        '    sort by amount descending, ties by id ascending\n' +
+        '    creditor = people[0]\n' +
+        '    debtor   = people[last]\n' +
         '    if creditor.amount <= 0 or debtor.amount >= 0: break\n' +
         '    amount = min(creditor.amount, -debtor.amount)\n' +
-        '    transfers.push({from: debtor.id, to: creditor.id, amountCents: amount})\n' +
-        '    creditor.amount -= amount\n' +
-        '    debtor.amount   += amount\n' +
-        '    remove any entries whose amount is now 0\n' +
-        '  return transfers   // at most n-1 transfers',
+        '    emit transfer debtor -> creditor of amount\n' +
+        '    creditor.amount -= amount; debtor.amount += amount\n' +
+        '    drop anyone now at zero\n' +
+        'return transfers          // at most n-1',
       worked_example:
-        'Balances A:+2000, B:-1000, C:-1000 -> round 1: creditor A (only positive balance), ' +
-        'debtor is the LAST entry after sorting descending by amount with ties broken ' +
-        'ascending by id - B and C tie at -1000, so C sorts after B and is picked as debtor ' +
-        '-> transfer 1000 from C to A -> C settles to 0 and drops out -> round 2: A:+1000, ' +
-        'B:-1000 -> transfer 1000 from B to A -> both settle to 0. Result: 2 transfers for ' +
-        '3 members (n-1). Verified directly: simplifyDebts({A:2000,B:-1000,C:-1000}) -> ' +
-        '[{"from":"C","to":"A","amountCents":1000},{"from":"B","to":"A","amountCents":1000}].',
+        'A:+2000, B:-1000, C:-1000. Round 1: creditor A; sorting ties ascending by ' +
+        'id puts B before C, and the debtor is the LAST entry, so C is picked. C ' +
+        'pays A 1000 and drops out. Round 2: A:+1000, B:-1000, B pays A 1000. Two ' +
+        'transfers for three people. Verified against the real function: ' +
+        '[{from:C,to:A,1000},{from:B,to:A,1000}].',
+    },
+    {
+      id: 'optimistic-write',
+      name: 'Optimistic write with rollback',
+      problem:
+        'A shared backend means every change is a network round trip. Waiting for ' +
+        'the server before showing anything makes the app feel broken on a train; ' +
+        'showing it and never checking makes the app lie.',
+      approach:
+        'Validate locally, apply to the cache, notify the view and return success ' +
+        'synchronously - then write in the background. On success reconcile the ' +
+        'temporary id with the server id. On failure restore the pre-change ' +
+        'snapshot, notify again, and raise a persistent banner. The exception is ' +
+        'any action whose outcome cannot be known locally - joining by code - ' +
+        'which reports through a callback instead of claiming success.',
+      complexity: 'O(1) per action locally; one round trip in the background.',
+      pseudocode:
+        'result = validateLocally(action)\n' +
+        'if not result.ok: return result          // nothing touched\n' +
+        'snapshot = deepClone(affected slice of state)\n' +
+        'applyToCache(action); notify(); \n' +
+        'server.write(action)\n' +
+        '  .then(row => { reconcileIds(row); status("saved") })\n' +
+        '  .catch(err => { restore(snapshot); notify(); banner(err) })\n' +
+        'return {ok: true}                        // synchronous',
+      worked_example:
+        'Adding an expense offline: it appears instantly, the write fails, the row ' +
+        'is removed again and the banner says it was not saved. Nothing is queued ' +
+        'for retry - which is a known gap, but the user is told rather than left ' +
+        'believing it saved.',
     },
   ];
 
-  // =========================================================================
-  // STATE_MACHINE - the app's conceptual UI lifecycle (not a literal
-  // stored field, but the states the view logic in js/app.js/js/admin.js
-  // actually moves through).
-  // =========================================================================
+  // =======================================================================
+  // State machine
+  // =======================================================================
 
   var STATE_MACHINE = {
     states: [
       { id: 'boot', label: 'Booting' },
-      { id: 'ready', label: 'Ready (idle, panels reflect current state)' },
-      { id: 'modal_open', label: 'Modal open (new group / add-edit expense / settle up)' },
-      { id: 'validation_error', label: 'Modal open, showing validation errors' },
-      { id: 'admin_locked', label: 'Admin console: locked behind the password gate' },
-      { id: 'admin_unlocked', label: 'Admin console: unlocked for this session' },
+      { id: 'demo', label: 'Demo mode (local)' },
+      { id: 'signed_out', label: 'Signed out' },
+      { id: 'recovering', label: 'Password recovery' },
+      { id: 'loading', label: 'Loading groups' },
+      { id: 'ready', label: 'Ready (shared)' },
+      { id: 'modal_open', label: 'Dialog open' },
+      { id: 'saving', label: 'Saving' },
+      { id: 'save_failed', label: 'Save failed' },
+      { id: 'settled', label: 'All settled up' },
     ],
     transitions: [
-      { from: 'boot', to: 'ready', on: 'SW.Store.init() completes and calls notify() for the first time' },
-      { from: 'ready', to: 'modal_open', on: 'user opens New group / Add expense / Settle up, or presses "n" (which opens Add-expense specifically, not the other modals)' },
-      { from: 'modal_open', to: 'ready', on: 'dispatch returns {ok:true} on submit, or the user cancels / presses Esc' },
-      { from: 'modal_open', to: 'validation_error', on: 'live validateExpense/parseAmount finds a problem, or dispatch returns {ok:false}' },
-      { from: 'validation_error', to: 'modal_open', on: 'user edits a field and the live validity message recomputes' },
-      { from: 'validation_error', to: 'ready', on: 'user fixes the problem and submits successfully, or cancels / presses Esc' },
-      { from: 'ready', to: 'ready', on: 'any other successful dispatch (rename/delete/select group, settle up, import, reset, seed demo) triggers notify() and a re-render' },
-      { from: 'admin_locked', to: 'admin_unlocked', on: 'submitted password === "123"' },
-      { from: 'admin_unlocked', to: 'admin_locked', on: 'user clicks "Log out", or a new browser session starts (sessionStorage is empty)' },
+      { from: 'boot', to: 'demo', on: 'no backend configured, or unreachable' },
+      { from: 'boot', to: 'signed_out', on: 'backend configured, no session' },
+      { from: 'boot', to: 'loading', on: 'session restored' },
+      { from: 'boot', to: 'recovering', on: 'arrived from a password-reset link' },
+      { from: 'signed_out', to: 'demo', on: '"Try the demo without an account"' },
+      { from: 'signed_out', to: 'loading', on: 'sign-in or sign-up succeeds' },
+      { from: 'recovering', to: 'loading', on: 'new password set' },
+      { from: 'loading', to: 'ready', on: 'groups and expenses loaded' },
+      { from: 'loading', to: 'save_failed', on: 'the load fails' },
+      { from: 'ready', to: 'modal_open', on: 'add expense, settle up, invite, join, confirm' },
+      { from: 'modal_open', to: 'ready', on: 'submit, cancel or Escape' },
+      { from: 'ready', to: 'saving', on: 'any mutating action' },
+      { from: 'saving', to: 'ready', on: 'the server accepts' },
+      { from: 'saving', to: 'save_failed', on: 'the server refuses; the cache rolls back' },
+      { from: 'save_failed', to: 'ready', on: 'a later write succeeds, or the banner is dismissed' },
+      { from: 'ready', to: 'settled', on: 'every balance in the group reaches zero' },
+      { from: 'settled', to: 'ready', on: 'a new expense is added' },
+      { from: 'ready', to: 'signed_out', on: 'sign out' },
+      { from: 'demo', to: 'signed_out', on: 'the sign-in screen is opened' },
     ],
   };
 
-  // =========================================================================
-
   return {
     ARCHITECTURE: ARCHITECTURE,
-    DATA_MODEL: DATA_MODEL,
+    JOURNEY: JOURNEY,
     LIST: LIST,
+    DATA_MODEL: DATA_MODEL,
     ALGORITHMS: ALGORITHMS,
     STATE_MACHINE: STATE_MACHINE,
   };
 })();
 
-// Node/CommonJS footer, matching js/model.js, so this registry can also
-// be required/inspected from Node tooling if needed. Never runs in the
-// browser, since `module` is undefined there.
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = SW.Workflows;
 }

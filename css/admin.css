@@ -16,8 +16,11 @@
   --accent: #6b7ce8;       /* admin's distinct indigo accent (app uses teal) */
   --danger: #e5644e;
   --warn: #e0a33e;
+  --success: #1cc29f;
   --radius: 10px;
   --accent-rgb: 107, 124, 232;
+  --danger-rgb: 229, 100, 78;
+  --success-rgb: 28, 194, 159;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -370,6 +373,437 @@ button {
 .arrow-icon {
   display: block;
   color: var(--accent);
+}
+
+/* ============================================================
+   JOURNEY — the master spine
+   ============================================================ */
+
+.journey-summary {
+  margin-bottom: 24px;
+}
+
+.journey-gap-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.gap-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  padding: 5px 12px;
+  border-radius: 999px;
+}
+
+.gap-chip-handled {
+  background: rgba(var(--success-rgb), 0.16);
+  color: var(--success);
+}
+
+.gap-chip-gap {
+  background: rgba(var(--danger-rgb), 0.16);
+  color: var(--danger);
+}
+
+.gap-chip-gap .warning-icon {
+  flex-shrink: 0;
+}
+
+/* The spine itself: one continuous vertical flow, stages then terminal. */
+.journey-spine {
+  max-width: 760px;
+}
+
+.journey-stage {
+  position: relative;
+}
+
+.journey-stage-row {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 16px;
+}
+
+/* The number-circle-and-connector column that reads as "the spine". */
+.journey-stage-spine {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.journey-node-circle {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.journey-terminal-circle {
+  background: var(--success);
+}
+
+.journey-connector {
+  flex: 1;
+  width: 2px;
+  min-height: 24px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+.journey-stage-content {
+  padding-bottom: 22px;
+  min-width: 0; /* let long text wrap instead of pushing the layout wide */
+}
+
+.journey-node-header {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.journey-node-header:hover {
+  background: var(--surface-2);
+}
+
+.journey-node-title {
+  font-weight: 700;
+  font-size: 0.98rem;
+}
+
+.journey-node-purpose {
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  flex: 1;
+  min-width: 140px;
+}
+
+.journey-node-chevron {
+  display: flex;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.journey-node-header[aria-expanded="true"] .journey-node-chevron {
+  transform: rotate(180deg);
+}
+
+/* Collapsible detail panels — same max-height accordion pattern as the
+   Workflows cards, so print/expand behaviour stays consistent everywhere. */
+.journey-stage-detail,
+.journey-branch-detail,
+.cross-cutting-detail {
+  max-height: 0;
+  overflow: hidden;
+  padding: 0 4px;
+  transition: max-height 0.2s ease, padding 0.2s ease;
+}
+
+.journey-stage-detail.open,
+.journey-branch-detail.open,
+.cross-cutting-detail.open {
+  max-height: none;
+  padding: 14px 4px 0;
+}
+
+.journey-entry-exit {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+  margin-bottom: 6px;
+}
+
+.journey-entry-exit p {
+  margin: 0;
+  font-size: 0.86rem;
+  color: var(--text-muted);
+}
+
+/* Branches hang off their stage in an indented rail, each one prefixed
+   with a small elbow connector so it visually reads as coming off the
+   spine node directly above it. */
+.journey-branches-rail {
+  margin: 10px 0 0 20px;
+  padding-left: 16px;
+  border-left: 2px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.journey-branches-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.journey-branch-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 4px);
+  padding: 8px 12px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 0.88rem;
+}
+
+.journey-branch-btn:hover {
+  background: var(--surface-2);
+}
+
+.elbow-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.journey-branch-title {
+  flex: 1;
+  font-weight: 600;
+}
+
+.journey-branch-chevron {
+  display: flex;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.journey-branch-btn[aria-expanded="true"] .journey-branch-chevron {
+  transform: rotate(180deg);
+}
+
+.journey-branch-missing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 0.86rem;
+  color: var(--text-muted);
+}
+
+.journey-branch-detail {
+  padding-left: 4px;
+}
+
+.journey-branch-detail.open {
+  padding: 12px 4px 4px;
+}
+
+/* Small warning flag on any node/pill/card that carries a known-gap
+   edge case — deliberately loud, never a subtle tint. */
+.gap-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: var(--danger);
+  background: rgba(var(--danger-rgb), 0.16);
+  padding: 2px 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+/* The terminal ("everyone settled up") node reads as the goal state:
+   a distinct green accent instead of the spine's indigo. */
+.journey-terminal {
+  margin-top: 4px;
+}
+
+.journey-terminal .journey-stage-content {
+  padding-bottom: 0;
+}
+
+.journey-terminal-title {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--success);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--success);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+
+.journey-terminal-desc {
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  margin: 10px 4px 0;
+}
+
+.journey-terminal .invariants-list {
+  margin-left: 4px;
+}
+
+/* Cross-cutting concerns: a separate band below the spine, since these
+   apply everywhere rather than at one point on it. */
+.journey-crosscutting {
+  margin-top: 34px;
+  padding-top: 22px;
+  border-top: 2px dashed var(--border);
+}
+
+.journey-crosscutting-desc {
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  margin: 0 0 14px;
+}
+
+.cross-cutting-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cross-cutting-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--text-muted);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.cross-cutting-header {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 12px 14px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.cross-cutting-header:hover {
+  background: var(--surface-2);
+}
+
+.cross-cutting-title {
+  font-weight: 700;
+  font-size: 0.94rem;
+}
+
+.cross-cutting-trigger {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  flex: 1;
+  min-width: 120px;
+}
+
+.cross-cutting-chevron {
+  display: flex;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.cross-cutting-header[aria-expanded="true"] .cross-cutting-chevron {
+  transform: rotate(180deg);
+}
+
+.cross-cutting-detail {
+  padding: 0 14px;
+}
+
+.cross-cutting-detail.open {
+  padding: 0 14px 16px;
+}
+
+/* Edge case tables — the honesty mechanism. Known-gap rows get a loud
+   warning treatment: a tinted row background plus a solid danger badge,
+   not a subtle border tweak. */
+.edgecase-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+  margin-bottom: 6px;
+}
+
+.edgecase-table th,
+.edgecase-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.edgecase-table th {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.edgecase-status {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.edgecase-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  padding: 3px 9px;
+  border-radius: 999px;
+}
+
+.edgecase-badge-handled {
+  background: rgba(var(--success-rgb), 0.16);
+  color: var(--success);
+}
+
+.edgecase-badge-gap {
+  background: var(--danger);
+  color: #fff;
+}
+
+.edgecase-row-gap {
+  background: rgba(var(--danger-rgb), 0.08);
+}
+
+.edgecase-row-gap .edgecase-case {
+  font-weight: 700;
+  color: var(--danger);
+}
+
+.edgecase-handling {
+  color: var(--text-muted);
 }
 
 /* ============================================================
@@ -961,6 +1395,54 @@ button {
   .admin-main {
     padding: 18px 16px 50px;
   }
+
+  /* The spine's two-column grid (number circle + content) still works at
+     this width, but the circle shrinks and the rail's indent tightens so
+     it reads as a simple stacked flow rather than a wide diagram. */
+  .journey-stage-row {
+    grid-template-columns: 28px 1fr;
+    gap: 10px;
+  }
+
+  .journey-node-circle {
+    width: 26px;
+    height: 26px;
+    font-size: 0.76rem;
+  }
+
+  .journey-node-header,
+  .cross-cutting-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .journey-branches-rail {
+    margin-left: 10px;
+    padding-left: 10px;
+  }
+
+  .edgecase-table,
+  .edgecase-table tbody,
+  .edgecase-table tr {
+    display: block;
+    width: 100%;
+  }
+
+  .edgecase-table thead {
+    display: none;
+  }
+
+  .edgecase-table td {
+    display: block;
+    border-bottom: none;
+    padding: 3px 0;
+  }
+
+  .edgecase-row {
+    display: block;
+    padding: 8px 4px;
+    border-bottom: 1px solid var(--border);
+  }
 }
 
 /* ============================================================
@@ -989,6 +1471,25 @@ button {
   .workflow-card-body {
     max-height: none !important;
     padding: 0 18px 18px !important;
+  }
+
+  .journey-stage-detail,
+  .journey-branch-detail,
+  .cross-cutting-detail {
+    max-height: none !important;
+  }
+
+  .journey-stage-detail {
+    padding: 14px 4px 0 !important;
+  }
+
+  .journey-branch-detail,
+  .cross-cutting-detail {
+    padding: 12px 4px 4px !important;
+  }
+
+  .journey-stage {
+    break-inside: avoid;
   }
 
   details:not([open]) > *:not(summary) {
