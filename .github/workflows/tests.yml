@@ -37,3 +37,10 @@ jobs:
       - name: Database security tests
         run: node rls.test.js
         working-directory: tests
+
+      # Drives the real store against a stubbed network: a dead connection
+      # must keep the work and retry it; a server refusal must not be retried
+      # forever. Both were regressions waiting to happen.
+      - name: Offline queue tests
+        run: node queue.test.js
+        working-directory: tests

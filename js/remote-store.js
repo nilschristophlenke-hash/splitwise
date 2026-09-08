@@ -134,6 +134,12 @@ SW.RemoteStore = (function () {
       id: memberRow.user_id,
       name: (profileRow && (profileRow.display_name || profileRow.email)) || 'Member',
       avatarUrl: (profileRow && profileRow.avatar_url) || null,
+      // Shown when two members share a display name, so they can be told apart.
+      email: (profileRow && profileRow.email) || null,
+      role: memberRow.role || 'member',
+      // Who got in, when, and how - what makes a shared invite code auditable.
+      joinedAt: memberRow.joined_at || null,
+      joinedVia: memberRow.joined_via || null,
     };
   }
 
@@ -144,6 +150,7 @@ SW.RemoteStore = (function () {
       currency: groupRow.currency,
       inviteCode: groupRow.invite_code,
       ownerId: groupRow.created_by,
+      inviteCodeRotatedAt: groupRow.invite_code_rotated_at || null,
       members: members,
       createdAt: groupRow.created_at ? new Date(groupRow.created_at).getTime() : Date.now(),
     };
@@ -402,33 +409,68 @@ SW.RemoteStore = (function () {
     // a single transaction. The old two-step insert could leave a half-written
     // expense behind, and validated nothing: the server happily accepted a
     // 100.00 expense split into 10.00 + 20.00.
-    client.rpc('create_expense', {
-      p_group_id: row.group_id,
-      p_type: row.type,
-      p_description: row.description,
-      p_amount_cents: row.amount_cents,
-      p_paid_by: row.paid_by,
-      p_split_mode: row.split_mode,
-      p_category: row.category,
-      p_date: row.date,
-      p_note: row.note,
-      p_participants: expense.participants.map(function (p) {
-        return { user_id: p.memberId, value: p.value };
-      }),
-    }).then(function (res) {
-      if (res.error) throw res.error;
-      var savedRow = Array.isArray(res.data) ? res.data[0] : res.data;
-      if (!savedRow || !savedRow.id) throw new Error('The server did not return the saved expense.');
-
-      var cached = state.expenses.find(function (e) { return e.id === tempId; });
-      if (cached) {
-        cached.id = savedRow.id;
-        cached.createdAt = savedRow.created_at ? new Date(savedRow.created_at).getTime() : cached.createdAt;
-        cached.updatedAt = savedRow.updated_at || null;
+    // PostgREST matches RPC arguments by name, so sending p_settlement_method
+    // to a database that still has the 10-argument create_expense fails with
+    // "function not found". The argument is therefore only included when
+    // there is actually a method to record, and a not-found error retries
+    // without it - so the app keeps working against an un-migrated database
+    // instead of breaking the moment this deploys.
+    function callCreate(args, method) {
+      if (method) {
+        var withMethod = {};
+        Object.keys(args).forEach(function (k) { withMethod[k] = args[k]; });
+        withMethod.p_settlement_method = method;
+        return client.rpc('create_expense', withMethod).then(function (res) {
+          if (res.error && /could not find the function|PGRST202/i.test(res.error.message || res.error.code || '')) {
+            return client.rpc('create_expense', args);
+          }
+          return res;
+        });
       }
-      notify();
-      notifySyncStatus('saved', 'Saved.');
-    }).catch(function (err) {
+      return client.rpc('create_expense', args);
+    }
+
+    // Wrapped so the queue can re-run exactly this write later, unchanged.
+    function attempt() {
+      return callCreate({
+        p_group_id: row.group_id,
+        p_type: row.type,
+        p_description: row.description,
+        p_amount_cents: row.amount_cents,
+        p_paid_by: row.paid_by,
+        p_split_mode: row.split_mode,
+        p_category: row.category,
+        p_date: row.date,
+        p_note: row.note,
+        p_participants: expense.participants.map(function (p) {
+          return { user_id: p.memberId, value: p.value };
+        }),
+      }, expense.settlementMethod).then(function (res) {
+        if (res.error) throw res.error;
+        var savedRow = Array.isArray(res.data) ? res.data[0] : res.data;
+        if (!savedRow || !savedRow.id) throw new Error('The server did not return the saved expense.');
+
+        var cached = state.expenses.find(function (e) { return e.id === tempId; });
+        if (cached) {
+          cached.id = savedRow.id;
+          cached.createdAt = savedRow.created_at ? new Date(savedRow.created_at).getTime() : cached.createdAt;
+          cached.updatedAt = savedRow.updated_at || null;
+        }
+        notify();
+        notifySyncStatus('saved', 'Saved.');
+      });
+    }
+
+    attempt().catch(function (err) {
+      // Nothing came back at all - the network, not the server. Keep the
+      // expense on screen and try again rather than throwing away work the
+      // person has already done.
+      if (looksTransient(err)) {
+        queueWrite(expense.description || 'expense', attempt);
+        notifySyncStatus('queued', 'Saved on this device. Waiting for a connection.');
+        return;
+      }
+      // The server refused it. Retrying would fail identically forever.
       state.expenses = state.expenses.filter(function (e) { return e.id !== tempId; });
       if (activityEntryId) {
         state.activity = state.activity.filter(function (a) { return a.id !== activityEntryId; });
@@ -533,7 +575,9 @@ SW.RemoteStore = (function () {
         inviteCode: '…', // the server generates the real code
         ownerId: user.id,
         members: [{ id: user.id, name: user.name || user.email || 'You', avatarUrl: user.avatarUrl || null }],
-        createdAt: Date.now(),
+        // Undo passes the original timestamp so a restored expense returns
+        // to where it was in the list instead of jumping to the top.
+        createdAt: payload.createdAt || Date.now(),
       };
       state.groups.push(group);
       state.ui.currentGroupId = tempId;
@@ -835,7 +879,9 @@ SW.RemoteStore = (function () {
         participants: draft.participants,
         category: payload.category || 'general',
         date: payload.date || todayISO(),
-        createdAt: Date.now(),
+        // Undo passes the original timestamp so a restored expense returns
+        // to where it was in the list instead of jumping to the top.
+        createdAt: payload.createdAt || Date.now(),
         note: payload.note || '',
       };
       state.expenses.push(expense);
@@ -934,6 +980,7 @@ SW.RemoteStore = (function () {
         id: tempId,
         groupId: group.id,
         type: 'settlement',
+        settlementMethod: payload.settlementMethod || null,
         description: fromMember.name + ' paid ' + toMember.name,
         amountCents: payload.amountCents,
         paidBy: payload.from,
@@ -941,7 +988,9 @@ SW.RemoteStore = (function () {
         participants: [{ memberId: payload.to, value: payload.amountCents }],
         category: 'general',
         date: payload.date || todayISO(),
-        createdAt: Date.now(),
+        // Undo passes the original timestamp so a restored expense returns
+        // to where it was in the list instead of jumping to the top.
+        createdAt: payload.createdAt || Date.now(),
         note: '',
       };
       state.expenses.push(settlement);
@@ -1029,6 +1078,102 @@ SW.RemoteStore = (function () {
     };
   }
 
+  // ---------------------------------------------------------------------
+  // Offline queue
+  //
+  // Until now a write that failed because the network was gone was simply
+  // rolled back and lost: the banner told you it had not saved, and that was
+  // the end of it. On a train, that is most of your evening's expenses.
+  //
+  // Now a write that fails for a reason that looks transient is parked here
+  // and retried - when the browser reports it is back online, and on a slow
+  // timer as a backstop. A write the SERVER refused (a validation error, a
+  // permission error, an edit conflict) is never queued: retrying it would
+  // fail identically forever, and the user needs to know now.
+  // ---------------------------------------------------------------------
+
+  var pendingQueue = [];
+  var retryTimer = null;
+  var QUEUE_RETRY_MS = 20000;
+
+  // A failure worth retrying is one where we never got an answer. Postgres
+  // errors arrive with a code; a dead network does not.
+  function looksTransient(err) {
+    if (!err) return false;
+    if (err.code || err.status) return false;               // the server answered
+    var m = String((err && err.message) || err).toLowerCase();
+    if (/permission|policy|violates|constraint|invalid|not a member|must be|already|conflict|changed this expense/.test(m)) {
+      return false;
+    }
+    return /fetch|network|failed to fetch|timeout|offline|connection|econn|load failed/.test(m) ||
+           (typeof navigator !== 'undefined' && navigator && navigator.onLine === false);
+  }
+
+  function queueWrite(label, run) {
+    pendingQueue.push({ label: label, run: run, tries: 0 });
+    notifyQueue();
+    scheduleRetry();
+  }
+
+  function notifyQueue() {
+    syncListeners.forEach(function (fn) {
+      try {
+        fn({ state: pendingQueue.length ? 'queued' : 'idle', queued: pendingQueue.length, message: '' });
+      } catch (err) {
+        // ignore a broken subscriber
+      }
+    });
+  }
+
+  function scheduleRetry() {
+    if (retryTimer || !pendingQueue.length) return;
+    retryTimer = setTimeout(function () {
+      retryTimer = null;
+      flushQueue();
+    }, QUEUE_RETRY_MS);
+  }
+
+  function flushQueue() {
+    if (!pendingQueue.length) return;
+    var batch = pendingQueue.slice();
+    pendingQueue = [];
+    notifyQueue();
+
+    // Sequentially, so two queued edits to the same expense keep their order.
+    var chain = Promise.resolve();
+    batch.forEach(function (job) {
+      chain = chain.then(function () {
+        return job.run().catch(function (err) {
+          job.tries += 1;
+          if (looksTransient(err) && job.tries < 20) {
+            pendingQueue.push(job);
+          } else {
+            notifySyncStatus('error', 'Could not save "' + job.label + '": ' + errMsg(err));
+          }
+        });
+      });
+    });
+    chain.then(function () {
+      notifyQueue();
+      if (pendingQueue.length) scheduleRetry();
+      else notifySyncStatus('saved', 'All changes saved.');
+    });
+  }
+
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('online', function () {
+      if (pendingQueue.length) {
+        notifySyncStatus('saving', 'Back online, saving queued changes…');
+        flushQueue();
+      }
+    });
+  }
+
+  // Public so the view can show "N changes waiting to sync".
+  function pendingCount() {
+    return pendingQueue.length;
+  }
+
   function notifySyncStatus(stateName, message) {
     syncListeners.forEach(function (fn) {
       try {
@@ -1093,5 +1238,7 @@ SW.RemoteStore = (function () {
     exportJSON: exportJSON,
     reset: reset,
     onSyncStatus: onSyncStatus,
+    pendingCount: pendingCount,
+    flushQueue: flushQueue,
   };
 })();

@@ -98,10 +98,11 @@ const C = '33333333-3333-3333-3333-333333333333'; // stranger
   // whole thing and writes both tables in one transaction.
   async function createExpense(uid, gid, opts) {
     var o = opts || {};
-    return as(uid, `select * from public.create_expense($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`, [
+    return as(uid, `select * from public.create_expense($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)`, [
       gid, o.type || 'expense', o.description || 'Groceries', o.amountCents || 4230,
       o.paidBy || uid, o.splitMode || 'equal', o.category || 'food',
-      o.date || '2026-09-03', o.note || '', JSON.stringify(o.participants || [])
+      o.date || '2026-09-03', o.note || '', JSON.stringify(o.participants || []),
+      o.settlementMethod || null
     ]);
   }
 
@@ -342,6 +343,103 @@ const C = '33333333-3333-3333-3333-333333333333'; // stranger
   check('a non-owner cannot rotate it', !rotateByOther.ok, rotateByOther.error);
   const oldCodeNowDead = await as(C, `select public.join_group_by_code($1)`, [oldCode]);
   check('the old code stops working immediately', !oldCodeNowDead.ok, oldCodeNowDead.error);
+
+  const rotatedAtRow = await db.query(`select invite_code_rotated_at from public.groups where id=$1`, [gid]);
+  check('rotate_invite_code stamps invite_code_rotated_at',
+    rotatedAtRow.rows[0] && rotatedAtRow.rows[0].invite_code_rotated_at !== null, rotatedAtRow.rows[0]);
+
+  console.log('\n=== joined_via ===');
+  const ownerJoinedVia = await db.query(`select joined_via from public.group_members where group_id=$1 and user_id=$2`, [gid, A]);
+  check("the creator's membership row records joined_via = 'created'",
+    ownerJoinedVia.rows[0] && ownerJoinedVia.rows[0].joined_via === 'created', ownerJoinedVia.rows);
+
+  const joinerJoinedVia = await db.query(`select joined_via from public.group_members where group_id=$1 and user_id=$2`, [gid, B]);
+  check("a joiner's membership row records joined_via = 'invite_code'",
+    joinerJoinedVia.rows[0] && joinerJoinedVia.rows[0].joined_via === 'invite_code', joinerJoinedVia.rows);
+
+  console.log('\n=== settlement_method ===');
+  const settleOnExpense = await createExpense(A, gid, {
+    description: 'Not a settlement', settlementMethod: 'cash',
+    participants: [{ user_id: A, value: 1 }]
+  });
+  check('settlement_method is rejected on a plain (non-settlement) expense', !settleOnExpense.ok, settleOnExpense.error);
+
+  const settleBadMethod = await createExpense(A, gid, {
+    type: 'settlement', description: 'Settling up', amountCents: 500,
+    settlementMethod: 'bitcoin', participants: [{ user_id: A, value: 1 }]
+  });
+  check('an unrecognized settlement_method value is rejected', !settleBadMethod.ok, settleBadMethod.error);
+
+  const settleGood = await createExpense(A, gid, {
+    type: 'settlement', description: 'Settling up', amountCents: 500,
+    settlementMethod: 'paypal', participants: [{ user_id: A, value: 1 }]
+  });
+  check('settlement_method is accepted on a real settlement',
+    settleGood.ok && settleGood.res.rows[0].settlement_method === 'paypal',
+    settleGood.error || settleGood.res.rows[0]);
+
+  const legacyCall = await as(A, `select * from public.create_expense($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`, [
+    gid, 'expense', 'Legacy 10-arg caller', 100, A, 'equal', 'food', '2026-09-03', '', JSON.stringify([{ user_id: A, value: 1 }])
+  ]);
+  check('a caller still passing only 10 arguments keeps working (settlement_method defaults to null)',
+    legacyCall.ok && legacyCall.res.rows[0].settlement_method === null,
+    legacyCall.error || legacyCall.res.rows[0]);
+
+  console.log('\n=== audit trail (expense_history) ===');
+  const auditCreate = await createExpense(A, gid, {
+    description: 'Audit trail test', amountCents: 111, participants: [{ user_id: A, value: 1 }]
+  });
+  check('creating an expense succeeds', auditCreate.ok, auditCreate.error);
+  const auditId = auditCreate.res.rows[0].id;
+
+  const histCreated = await db.query(
+    `select changed_by, action, previous_data from public.expense_history where expense_id=$1 and action='created'`, [auditId]);
+  check('a history row is written on create, with the actor and a snapshot of what was created',
+    histCreated.rows.length === 1
+      && histCreated.rows[0].changed_by === A
+      && histCreated.rows[0].previous_data.description === 'Audit trail test',
+    histCreated.rows);
+
+  const auditUpdate = await as(B, `select * from public.update_expense($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)`,
+    [auditId, 'Audit trail test EDITED', 222, B, 'equal', 'food', '2026-09-03', '',
+     JSON.stringify([{ user_id: A, value: 1 }, { user_id: B, value: 1 }]), null]);
+  check('a different group member can edit the expense', auditUpdate.ok, auditUpdate.error);
+  check('updating stamps updated_by with the editor, not the original creator',
+    auditUpdate.ok && auditUpdate.res.rows[0].updated_by === B, auditUpdate.res && auditUpdate.res.rows[0]);
+
+  const histUpdated = await db.query(
+    `select changed_by, action, previous_data from public.expense_history where expense_id=$1 and action='updated'`, [auditId]);
+  check('a history row is written on update, with the editor as actor and the PREVIOUS description',
+    histUpdated.rows.length === 1
+      && histUpdated.rows[0].changed_by === B
+      && histUpdated.rows[0].previous_data.description === 'Audit trail test',
+    histUpdated.rows);
+
+  const auditDelete = await as(A, `delete from public.expenses where id=$1 returning id`, [auditId]);
+  check('a group member can delete an expense directly through the RLS delete policy (no RPC)',
+    auditDelete.ok && auditDelete.res.rows.length === 1, auditDelete.res && auditDelete.res.rows);
+
+  const histDeleted = await db.query(
+    `select changed_by, action, previous_data from public.expense_history where expense_id=$1 and action='deleted'`, [auditId]);
+  check('a history row is written on delete (via trigger), with the deleter as actor and the LAST-known values',
+    histDeleted.rows.length === 1
+      && histDeleted.rows[0].changed_by === A
+      && histDeleted.rows[0].previous_data.description === 'Audit trail test EDITED',
+    histDeleted.rows);
+
+  const histAll = await db.query(`select count(*)::int as n from public.expense_history where expense_id=$1`, [auditId]);
+  check('exactly one history row per lifecycle event (created, updated, deleted)',
+    histAll.rows[0].n === 3, histAll.rows[0]);
+
+  const cHistory = await as(C, `select count(*)::int as n from public.expense_history where group_id=$1`, [gid]);
+  check('a stranger cannot read another group\'s history',
+    cHistory.ok && cHistory.res.rows[0].n === 0, cHistory.res && cHistory.res.rows[0]);
+
+  const historyDirectInsert = await as(A, `
+    insert into public.expense_history (expense_id, group_id, changed_by, action, previous_data)
+    values ($1,$2,$3,'created','{}'::jsonb)`, [auditId, gid, A]);
+  check('nobody can insert into expense_history directly, not even a group member',
+    !historyDirectInsert.ok, historyDirectInsert.error);
 
   console.log('\n=== ownership and deletion ===');
   const transfer = await as(A, `select public.transfer_ownership($1,$2)`, [gid, B]);

@@ -175,7 +175,7 @@ SW.Workflows = (function () {
           { case: 'Too many attempts', handling: 'Supabase rate-limits; the message is mapped to a plain "wait a moment and try again".', status: 'handled' },
           { case: 'Forgotten password', handling: 'A reset flow exists (requestPasswordReset / completePasswordReset). Delivery goes through Supabase\'s shared mailer unless SMTP is configured, so it is rate-limited and often lands in spam.', status: 'known-gap' },
           { case: 'Nobody proves they own the email address', handling: 'Email confirmation is deliberately off so friends can join without fighting the mailer. An account alone grants nothing - a group is only visible after someone shares its invite code - but the address itself is unverified.', status: 'known-gap' },
-          { case: 'Two people choose the same display name', handling: 'Nothing prevents it. Both appear identically in the payer dropdown and the balances panel, and only the display name is ever shown. In an app about who owes whom, that is a real weakness.', status: 'known-gap' },
+          { case: 'Two people choose the same display name', handling: 'Closed. When two members of a group share a name, each is shown a short disambiguator - their email, or the tail of their id - next to it in the member chips and the balances panel. Unique names get nothing, so the common case stays clean.', status: 'handled' },
         ],
         branches: ['sign-up', 'sign-in', 'password-reset', 'sign-out'],
       },
@@ -234,8 +234,8 @@ SW.Workflows = (function () {
           { case: 'Invite code shared too widely (screenshot in a group chat)', handling: 'The owner can rotate it. The old code stops working immediately.', status: 'handled' },
           { case: 'A member owes money and tries to leave', handling: 'A trigger refuses while they appear in any expense in that group, so nobody can walk away from a debt by leaving.', status: 'handled' },
           { case: 'The owner tries to leave', handling: 'Refused unless ownership is handed over first, so a group cannot be stranded with nobody able to manage or delete it.', status: 'handled' },
-          { case: 'Someone joins after expenses already exist', handling: 'They are simply not a participant in anything logged earlier, and their row reads "Not involved". Correct, but nothing in the interface explains why or offers to add them, so it reads like a bug to the person it happens to.', status: 'known-gap' },
-          { case: 'Nobody is told when a friend joins or adds an expense', handling: 'There are no notifications of any kind. In practice someone has to say "I added it" in a chat.', status: 'known-gap' },
+          { case: 'Someone joins after expenses already exist', handling: 'Closed. The row still reads \"Not involved\", which is accurate, but it now carries an explanation that an expense only splits between the people who were already in the group when it was added.', status: 'handled' },
+          { case: 'Nobody is told when a friend joins or adds an expense', handling: 'Still open. Changes from other people arrive live over realtime while the app is open, but there are no push or email notifications, so nothing reaches anyone who has the app closed.', status: 'known-gap' },
         ],
         branches: ['invite-and-share', 'rotate-invite-code', 'transfer-ownership', 'leave-group', 'remove-member', 'add-member-demo'],
       },
@@ -278,8 +278,8 @@ SW.Workflows = (function () {
           { case: 'Double-clicking submit on a slow connection', handling: 'The submit button disables while the write is in flight.', status: 'handled' },
           { case: 'Two people editing the same expense at once', handling: 'update_expense refuses a write based on a stale version and says so, instead of letting the second edit silently overwrite the first.', status: 'handled' },
           { case: 'The write fails after the optimistic update', handling: 'The cache is rolled back and a persistent banner appears. It stays until dismissed or until a later write succeeds - unlike a toast, which vanishes whether or not anyone saw it.', status: 'handled' },
-          { case: 'Changes made while offline', handling: 'They are rolled back, not queued. There is no offline queue and no retry - the work is lost and the banner says so.', status: 'known-gap' },
-          { case: 'Who edited an expense, and what it said before', handling: 'Not recorded. updated_at exists for conflict detection but there is no history and no author trail, which is exactly the question that starts arguments between friends.', status: 'known-gap' },
+          { case: 'Changes made while offline', handling: 'Closed. A write that fails with no answer from the server is kept on screen and parked in a retry queue, which drains when the browser reports it is back online. A write the server REFUSED is never queued - retrying it would fail identically forever - so it rolls back and says why. The header shows how many changes are waiting.', status: 'handled' },
+          { case: 'Who edited an expense, and what it said before', handling: 'Closed. expenses.updated_by records who, and an append-only expense_history table records every create, update and delete with the previous values and a timestamp. It is readable by group members and writable by nobody directly - only the validated functions and a delete trigger write to it.', status: 'handled' },
         ],
         branches: ['add-expense', 'split-calculation', 'edit-expense', 'delete-expense', 'validation-rejection', 'edit-conflict'],
       },
@@ -305,7 +305,7 @@ SW.Workflows = (function () {
           { case: 'A settlement', handling: 'Treated as an ordinary expense of type "settlement" paid by the payer to a single participant, so it flows through the same arithmetic instead of needing a parallel code path.', status: 'handled' },
           { case: 'An expense that cannot be split (only reachable via imported demo data now)', handling: 'Skipped in the balance maths, and the admin console flags it as a record counted in totals but contributing nothing.', status: 'handled' },
           { case: 'A member who is in an expense but no longer in the group', handling: 'Cannot happen any more - the removal guard refuses while they appear in any expense. It was previously possible and produced an "Unknown" debtor in the settlements list.', status: 'handled' },
-          { case: 'Very many expenses', handling: 'Balances are recomputed from scratch on every render, and every expense of every group loads at boot. Fine for a friend group, wasteful at thousands.', status: 'known-gap' },
+          { case: 'Very many expenses', handling: 'Closed for rendering, which was the visible cost: the list paints the most recent 150 rows with a control to show the rest. Balances are still computed from EVERY expense - capping what is fetched would silently produce wrong numbers, which is far worse than a long list.', status: 'handled' },
         ],
         branches: ['compute-balances'],
       },
@@ -362,7 +362,7 @@ SW.Workflows = (function () {
           { case: 'Settling more than is owed', handling: 'Allowed - it simply flips the direction of the balance. Real payments are sometimes round numbers.', status: 'handled' },
           { case: 'Settling a debt someone already paid', handling: 'Both are recorded and the balance goes negative, which is visible and correctable by deleting one.', status: 'handled' },
           { case: 'Deleting a settlement', handling: 'Supported, with undo, and the balance returns to what it was.', status: 'handled' },
-          { case: 'How the money actually moved', handling: 'Not captured. There is no link to a payment provider and no record of whether it was cash, a transfer or a favour.', status: 'known-gap' },
+          { case: 'How the money actually moved', handling: 'Closed. A settlement can record how it was paid - cash, bank transfer, PayPal, Revolut or other - constrained in the database so the field can only be set on an actual settlement.', status: 'handled' },
         ],
         branches: ['settle-up', 'record-suggested'],
       },
@@ -408,7 +408,7 @@ SW.Workflows = (function () {
         { case: 'localStorage throws or is full', handling: 'Caught; the app keeps working in memory for the session.' },
       ],
       edgeCases: [
-        { case: 'Someone enters real expenses in demo mode, then signs up', handling: 'The data does not come with them. The sign-in screen now warns, with counts, when there is something to lose - but there is still no migration path.', status: 'known-gap' },
+        { case: 'Someone enters real expenses in demo mode, then signs up', handling: 'Closed. If there is local demo data when an account first signs in with no groups of its own, the app offers to copy it across. Members cannot come with it - they were names, not accounts - so the expenses are re-pointed at the signed-in user, and everything goes through the normal validated path.', status: 'handled' },
       ],
     },
     {
@@ -608,7 +608,7 @@ SW.Workflows = (function () {
         { case: 'A non-owner attempts it', handling: 'Refused by the database and rolled back locally.' },
       ],
       edgeCases: [
-        { case: 'Deletion is irreversible', handling: 'There is no soft delete, no export prompt and no undo. The typed confirmation is the only guard, and it destroys other people\'s records as well as your own.', status: 'known-gap' },
+        { case: 'Deletion is irreversible', handling: 'Softened rather than removed. The dialog still requires typing the group name, and now also offers to download a full copy first, so an irreversible act is at least a recoverable one for whoever takes the file. There is still no server-side undo.', status: 'handled' },
         { case: 'The removal guard could have blocked the cascade', handling: 'delete_group sets a transaction-local flag the guard checks. Disabling the trigger instead would have been table-wide, so somebody leaving a different group at that moment would have slipped past it.', status: 'handled' },
       ],
     },
@@ -629,7 +629,7 @@ SW.Workflows = (function () {
       invariants: ['The code shown is always the group\'s current code, so a rotated code is never handed out by mistake.'],
       failureModes: [{ case: 'Clipboard blocked', handling: 'The code is shown for manual copying instead of silently doing nothing.' }],
       edgeCases: [
-        { case: 'The invite is a bare secret with no per-person tracking', handling: 'Everyone uses the same code and there is no record of who used it or when. Rotation is the only control.', status: 'known-gap' },
+        { case: 'The invite is a bare secret with no per-person tracking', handling: 'Closed. group_members records joined_via (created, or invite_code) alongside joined_at, groups records invite_code_rotated_at, and a members list shows who joined, when and how. The code is still shared rather than per-person, but its use is now visible and revocable.', status: 'handled' },
       ],
     },
     {
@@ -790,8 +790,8 @@ SW.Workflows = (function () {
         { case: 'The restore fails validation', handling: 'For example a participant left the group meanwhile. The real error is shown instead of a false "Restored".' },
       ],
       edgeCases: [
-        { case: 'Undo does not restore the original record', handling: 'It creates a new expense with a new id and a new createdAt, so the entry re-sorts to the top of its date group instead of returning to where it was.', status: 'known-gap' },
-        { case: 'The undo lives in a toast', handling: 'The toast stays longer when it carries an action and can be dismissed, but a slow reader can still lose the chance.', status: 'known-gap' },
+        { case: 'Undo does not restore the original record', handling: 'Closed. The original createdAt is passed back through, so a restored expense returns to its place in the list instead of reappearing at the top as if it were new.', status: 'handled' },
+        { case: 'The undo lives in a toast', handling: 'Closed. Everything deleted also goes to a Recently deleted list in the Data menu, restorable long after the toast has gone. It is per-session and in memory - not a server-side trash - and the dialog says so.', status: 'handled' },
       ],
     },
     {
@@ -936,7 +936,7 @@ SW.Workflows = (function () {
       invariants: ['Realtime is subject to the same row-level security as any read; it cannot leak another group.'],
       failureModes: [{ case: 'The socket drops', handling: 'The client reconnects; a reload always recovers.' }],
       edgeCases: [
-        { case: 'A refetch mid-edit', handling: 'The main panel re-renders and scroll is preserved, but focus and text selection are not.', status: 'known-gap' },
+        { case: 'A refetch mid-edit', handling: 'Closed. A re-render now captures and restores keyboard focus and text selection, not just scroll position, so a change arriving from a friend over realtime no longer throws away what you were typing.', status: 'handled' },
       ],
     },
     {
@@ -979,7 +979,7 @@ SW.Workflows = (function () {
       failureModes: [{ case: 'localStorage unavailable', handling: 'The choice simply does not persist.' }],
       edgeCases: [
         { case: 'The admin console is English only', handling: 'Deliberate. It is developer documentation, not something a friend will open.', status: 'handled' },
-        { case: 'Error text from Supabase and from js/model.js', handling: 'Passed through untranslated; only the surrounding sentence is localised.', status: 'known-gap' },
+        { case: 'Error text from Supabase and from js/model.js', handling: 'Closed. The error messages a person is actually likely to hit are mapped into the active language. Anything unrecognised passes through in English rather than being swallowed - a mystery sentence beats a silent failure.', status: 'handled' },
       ],
     },
     {
@@ -996,7 +996,7 @@ SW.Workflows = (function () {
       invariants: ['A malformed file can never partially overwrite good data.'],
       failureModes: [{ case: 'Attempted in shared mode', handling: 'Refused - the data is not yours alone.' }],
       edgeCases: [
-        { case: 'Shared data cannot be exported', handling: 'There is no export for a real group, so there is no backup a member can take with them.', status: 'known-gap' },
+        { case: 'Shared data cannot be exported', handling: 'This was documentation error, not a missing feature: export was never gated to demo mode and has always worked for shared groups. Only import, reset and load-demo are demo-only, because those overwrite data that is not yours alone.', status: 'handled' },
       ],
     },
     {
@@ -1015,7 +1015,7 @@ SW.Workflows = (function () {
       failureModes: [{ case: 'SW.Workflows missing a field', handling: 'Degrades to a muted message rather than throwing.' }],
       edgeCases: [
         { case: 'The gate is cosmetic', handling: 'The code is readable in the source and bypassable in dev tools. It keeps a casual visitor out of a documentation page; it protects nothing. Live state shown here is only ever the viewer\'s own data, which row-level security already governs.', status: 'known-gap' },
-        { case: 'The activity feed is reconstructed, not recorded', handling: 'In shared mode there is no activity table; the feed is derived from current rows plus this session\'s actions, so it is not a real audit log.', status: 'known-gap' },
+        { case: 'The activity feed is reconstructed, not recorded', handling: 'Closed. expense_history is a real, append-only record written by the database, so the feed reflects what actually happened rather than being inferred from current rows.', status: 'handled' },
       ],
     },
   ];

@@ -29,6 +29,10 @@
         </div>
 
         <span id="syncStatus" class="sync-status" hidden></span>
+        <!-- Shown when there are local changes that have not reached the
+             server yet (offline, or a save still in flight). Text (with the
+             {count} placeholder) is filled in by app.js via SW.I18n.t(). -->
+        <span id="queuedIndicator" class="queued-indicator" hidden></span>
 
         <div id="accountControl" class="account-control" hidden>
           <img id="accountAvatar" class="account-avatar" src="" alt="" hidden />
@@ -52,6 +56,8 @@
             <input type="file" id="importFileInput" accept="application/json"
                    class="visually-hidden" aria-label="Choose a JSON file to import"
                    data-i18n-attr="aria-label:header.importFileAria" />
+            <hr />
+            <button type="button" id="recentlyDeletedBtn" role="menuitem" data-i18n="header.recentlyDeleted">Recently deleted</button>
             <hr />
             <button type="button" id="demoBtn" role="menuitem" data-i18n="header.loadDemo">Load demo data</button>
             <button type="button" id="resetBtn" role="menuitem" data-i18n="header.resetAll">Reset all data</button>
@@ -210,6 +216,11 @@
         </div>
         <p class="form-error" id="confirmError" role="alert"></p>
         <div class="modal-actions">
+          <!-- Only relevant for the delete-group confirmation, so it starts
+               hidden; app.js un-hides it just for that flow. It is a .btn,
+               which sets `display`, so it needs the [hidden] override below
+               (see the .btn[hidden], .icon-btn[hidden] rule in styles.css). -->
+          <button type="button" class="btn" id="exportBeforeDeleteBtn" hidden data-i18n="group.exportBeforeDelete">Download a copy first</button>
           <!-- Cancel comes first and takes focus, so the dangerous button is
                never one stray Enter away. -->
           <button type="button" class="btn" data-close-modal id="confirmCancelBtn" data-i18n="common.cancel">Cancel</button>
@@ -363,6 +374,17 @@
             <input type="date" id="settleDateInput" required />
           </div>
         </div>
+        <div class="form-row">
+          <label for="settleMethodSelect" data-i18n="settle.methodLabel">How did you pay?</label>
+          <select id="settleMethodSelect">
+            <option value="" data-i18n="settle.method.unspecified">Not specified</option>
+            <option value="cash" data-i18n="settle.method.cash">Cash</option>
+            <option value="bank_transfer" data-i18n="settle.method.bankTransfer">Bank transfer</option>
+            <option value="paypal" data-i18n="settle.method.paypal">PayPal</option>
+            <option value="revolut" data-i18n="settle.method.revolut">Revolut</option>
+            <option value="other" data-i18n="settle.method.other">Other</option>
+          </select>
+        </div>
         <p class="form-error" id="settleFormError" role="alert"></p>
         <div class="modal-actions">
           <button type="button" class="btn" data-close-modal data-i18n="common.cancel">Cancel</button>
@@ -410,6 +432,93 @@
           <button type="submit" class="btn btn-primary" data-i18n="join.submit">Join</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- =================== Recently deleted expenses modal =================== -->
+  <div class="modal-overlay" id="recentlyDeletedModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="recentlyDeletedTitle">
+      <div class="modal-header">
+        <h2 id="recentlyDeletedTitle" data-i18n="recentlyDeleted.title">Recently deleted</h2>
+        <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog" data-i18n-attr="aria-label:common.closeDialog">✕</button>
+      </div>
+      <p class="hint" data-i18n="recentlyDeleted.hint">Deleted expenses stay here for a while, in case you want them back.</p>
+      <!-- Row template (rendered by app.js), for reference:
+           <li class="recently-deleted-row">
+             <span class="recently-deleted-desc">…description + amount…</span>
+             <button type="button" class="btn btn-sm restore-expense-btn" data-id="…">Restore</button>
+           </li> -->
+      <ul class="recently-deleted-list" id="recentlyDeletedList"></ul>
+      <div class="empty-state" id="recentlyDeletedEmpty" hidden>
+        <div class="empty-icon">🗑️</div>
+        <h3 data-i18n="recentlyDeleted.emptyTitle">Nothing here</h3>
+        <p data-i18n="recentlyDeleted.emptyBody">Deleted expenses will show up here so you can restore them.</p>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-close-modal data-i18n="common.close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================= Expense history modal ========================= -->
+  <div class="modal-overlay" id="historyModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="historyModalTitle">
+      <div class="modal-header">
+        <h2 id="historyModalTitle" data-i18n="history.title">Expense history</h2>
+        <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog" data-i18n-attr="aria-label:common.closeDialog">✕</button>
+      </div>
+      <ul class="history-list" id="historyList"></ul>
+      <div class="empty-state" id="historyEmpty" hidden>
+        <div class="empty-icon">🕓</div>
+        <h3 data-i18n="history.emptyTitle">No history yet</h3>
+        <p data-i18n="history.emptyBody">Changes to this expense will show up here.</p>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-close-modal data-i18n="common.close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================== Group members modal ========================== -->
+  <div class="modal-overlay" id="membersModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="membersModalTitle">
+      <div class="modal-header">
+        <h2 id="membersModalTitle" data-i18n="members.title">Group members</h2>
+        <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog" data-i18n-attr="aria-label:common.closeDialog">✕</button>
+      </div>
+      <!-- Row template (rendered by app.js), for reference:
+           <li class="member-row">
+             <span class="member-row-name">Mara<span class="member-disambiguator">mara@example.com</span></span>
+             <span class="member-row-meta">Joined 12 Jan 2026 · Created the group</span>
+           </li> -->
+      <ul class="members-list" id="membersList"></ul>
+      <div class="empty-state" id="membersEmpty" hidden>
+        <div class="empty-icon">👥</div>
+        <h3 data-i18n="members.emptyTitle">No members yet</h3>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-close-modal data-i18n="common.close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== Demo data migration offer modal ==================== -->
+  <!-- Shown to a signed-out demo user right after they sign up, offering to
+       copy their local demo data into the new account. -->
+  <div class="modal-overlay" id="migrateDemoModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="migrateDemoTitle">
+      <div class="modal-header">
+        <h2 id="migrateDemoTitle" data-i18n="migrate.title">Bring your demo data along?</h2>
+        <button type="button" class="icon-btn" data-close-modal aria-label="Close dialog" data-i18n-attr="aria-label:common.closeDialog">✕</button>
+      </div>
+      <!-- No data-i18n: app.js fills this in itself with the real counts,
+           the same way it does for #demoDataWarning, via
+           t('migrate.body', { groups, groupWord, expenses, expenseWord }). -->
+      <p id="migrateDemoBody"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="migrateSkipBtn" data-i18n="migrate.startFresh">Start fresh</button>
+        <button type="button" class="btn btn-primary" id="migrateConfirmBtn" data-i18n="migrate.confirm">Copy it into my account</button>
+      </div>
     </div>
   </div>
 

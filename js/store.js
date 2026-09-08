@@ -282,7 +282,9 @@ SW.Store = (function () {
         name: name,
         currency: currency,
         members: memberNames.map(function (n) { return { id: SW.Model.uid('m'), name: n }; }),
-        createdAt: Date.now(),
+        // Undo passes the original timestamp so a restored expense goes
+        // back where it was rather than jumping to the top of the list.
+        createdAt: payload.createdAt || Date.now(),
       };
 
       state.groups.push(group);
@@ -381,7 +383,9 @@ SW.Store = (function () {
         participants: draft.participants,
         category: payload.category || 'general',
         date: payload.date || todayISO(),
-        createdAt: Date.now(),
+        // Undo passes the original timestamp so a restored expense goes
+        // back where it was rather than jumping to the top of the list.
+        createdAt: payload.createdAt || Date.now(),
         note: payload.note || '',
       };
       state.expenses.push(expense);
@@ -460,7 +464,9 @@ SW.Store = (function () {
         participants: [{ memberId: payload.to, value: payload.amountCents }],
         category: 'general',
         date: payload.date || todayISO(),
-        createdAt: Date.now(),
+        // Undo passes the original timestamp so a restored expense goes
+        // back where it was rather than jumping to the top of the list.
+        createdAt: payload.createdAt || Date.now(),
         note: '',
       };
       state.expenses.push(settlement);

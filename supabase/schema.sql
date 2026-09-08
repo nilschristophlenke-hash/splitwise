@@ -903,3 +903,335 @@ grant execute on function public.delete_group(uuid) to authenticated;
 revoke all on function public.transfer_ownership(uuid, uuid) from public;
 grant execute on function public.transfer_ownership(uuid, uuid) to authenticated;
 revoke all on function public.assert_expense_valid(uuid, bigint, uuid, text, jsonb) from public;
+
+
+-- =============================================================================
+-- 8. AUDIT TRAIL, SETTLEMENT METHOD, AND INVITE TRACKING
+--
+-- Four small, additive gaps closed here without touching anything above:
+--   - expenses gets `updated_by` (who last edited it) and `settlement_method`
+--     (how a settlement was paid — only meaningful when type = 'settlement').
+--   - a new expense_history table gives group members a real, ordered record
+--     of who created/edited/deleted each expense and what it looked like
+--     beforehand, so the activity feed no longer has to be reconstructed.
+--   - group_members gets `joined_via` and groups gets
+--     `invite_code_rotated_at`, so a group can show who joined, when, how,
+--     and when the invite code was last revoked.
+-- =============================================================================
+
+-- ---- expenses: who last touched it, and how a settlement was paid --------
+alter table public.expenses add column if not exists updated_by uuid references auth.users(id);
+alter table public.expenses add column if not exists settlement_method text;
+
+alter table public.expenses drop constraint if exists expenses_settlement_method_values;
+alter table public.expenses add constraint expenses_settlement_method_values
+  check (settlement_method is null or settlement_method in ('cash','bank transfer','paypal','revolut','other'));
+
+-- Only a settlement can name a payment method; an ordinary expense cannot.
+alter table public.expenses drop constraint if exists expenses_settlement_method_type;
+alter table public.expenses add constraint expenses_settlement_method_type
+  check (settlement_method is null or type = 'settlement');
+
+-- ---- group_members / groups: who joined how, and when the code changed --
+alter table public.group_members add column if not exists joined_via text;
+alter table public.group_members drop constraint if exists group_members_joined_via_values;
+alter table public.group_members add constraint group_members_joined_via_values
+  check (joined_via is null or joined_via in ('created','invite_code'));
+
+alter table public.groups add column if not exists invite_code_rotated_at timestamptz;
+
+-- ---- expense_history: an append-only audit trail ---------------------------
+-- Deliberately no foreign key from expense_id to expenses(id): a row here
+-- has to keep meaning "this happened" even after the expense itself is
+-- gone (the 'deleted' row IS the only remaining record of a deleted
+-- expense), so it must not be cascade-deleted along with it, and must not
+-- block the expense delete on its own account either.
+--
+-- group_id DOES reference groups(id) on delete cascade: once delete_group()
+-- removes a group, its history stops mattering (nobody is left who is a
+-- member and could read it), and letting it cascade away here is the same
+-- choice already made for expenses/expense_participants/group_members.
+create table if not exists public.expense_history (
+  id uuid primary key default gen_random_uuid(),
+  expense_id uuid not null,
+  group_id uuid not null references public.groups(id) on delete cascade,
+  changed_by uuid references auth.users(id),
+  changed_at timestamptz not null default now(),
+  action text not null check (action in ('created','updated','deleted')),
+  -- The snapshot taken at each action:
+  --   created -> the row as it was just inserted (there is no "before")
+  --   updated -> the row as it was immediately before this update
+  --   deleted -> the row as it was immediately before deletion
+  -- Either way it is enough on its own to render "who did what, when, to
+  -- which group" without needing the expense row to still exist.
+  previous_data jsonb not null default '{}'::jsonb
+);
+
+create index if not exists idx_expense_history_group_id on public.expense_history(group_id, changed_at desc);
+create index if not exists idx_expense_history_expense_id on public.expense_history(expense_id, changed_at desc);
+
+alter table public.expense_history enable row level security;
+
+drop policy if exists "expense_history_select" on public.expense_history;
+create policy "expense_history_select" on public.expense_history
+  for select
+  using (public.is_group_member(group_id, auth.uid()));
+
+-- Deliberately no insert/update/delete policy — same pattern as
+-- group_members' missing insert policy above: with RLS enabled and no
+-- policy for a command, that command is denied for every ordinary client.
+-- The only writers are create_expense(), update_expense() and the trigger
+-- below, all of which are `security definer` and so bypass RLS for their
+-- own inserts.
+
+-- Deletes happen through the plain RLS delete policy on expenses (there is
+-- no delete_expense() RPC), so a trigger — not the functions above — is the
+-- only place that can catch them.
+create or replace function public.log_expense_deletion()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.expense_history (expense_id, group_id, changed_by, action, previous_data)
+  values (old.id, old.group_id, auth.uid(), 'deleted', to_jsonb(old));
+  return old;
+end;
+$$;
+
+drop trigger if exists expenses_log_deletion on public.expenses;
+create trigger expenses_log_deletion
+  before delete on public.expenses
+  for each row execute function public.log_expense_deletion();
+
+-- ---- create_expense: now also accepts settlement_method and logs history --
+-- The signature is gaining an 11th parameter, so `create or replace` alone
+-- would leave the old 10-argument function sitting right alongside this
+-- one and make every existing 10-argument call ambiguous ("function is not
+-- unique"). Drop the old signature explicitly first, then recreate with
+-- the new parameter appended LAST with a default of null — every existing
+-- caller that still passes exactly 10 arguments keeps working unchanged.
+drop function if exists public.create_expense(uuid, text, text, bigint, uuid, text, text, date, text, jsonb);
+
+create or replace function public.create_expense(
+  p_group_id uuid,
+  p_type text,
+  p_description text,
+  p_amount_cents bigint,
+  p_paid_by uuid,
+  p_split_mode text,
+  p_category text,
+  p_date date,
+  p_note text,
+  p_participants jsonb,
+  p_settlement_method text default null
+)
+returns public.expenses
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_expense public.expenses;
+begin
+  if auth.uid() is null then
+    raise exception 'You must be signed in.';
+  end if;
+  if not public.is_group_member(p_group_id, auth.uid()) then
+    raise exception 'You are not a member of this group.';
+  end if;
+
+  -- Belt-and-suspenders alongside the table constraint: a clean error from
+  -- the function beats a raw "constraint violated" reaching the client,
+  -- and the constraint still protects every other write path.
+  if p_settlement_method is not null and coalesce(p_type, 'expense') <> 'settlement' then
+    raise exception 'settlement_method can only be set on a settlement.';
+  end if;
+
+  perform public.assert_expense_valid(p_group_id, p_amount_cents, p_paid_by, p_split_mode, p_participants);
+
+  insert into public.expenses
+    (group_id, type, description, amount_cents, paid_by, split_mode, category, date, note, created_by, settlement_method)
+  values
+    (p_group_id, coalesce(p_type, 'expense'), p_description, p_amount_cents, p_paid_by,
+     p_split_mode, coalesce(p_category, 'general'), coalesce(p_date, current_date),
+     coalesce(p_note, ''), auth.uid(), p_settlement_method)
+  returning * into v_expense;
+
+  insert into public.expense_participants (expense_id, user_id, value)
+  select v_expense.id, (e->>'user_id')::uuid, (e->>'value')::numeric
+  from jsonb_array_elements(p_participants) e;
+
+  insert into public.expense_history (expense_id, group_id, changed_by, action, previous_data)
+  values (v_expense.id, v_expense.group_id, auth.uid(), 'created', to_jsonb(v_expense));
+
+  return v_expense;
+end;
+$$;
+
+-- ---- update_expense: now also records who edited it and what it said before
+create or replace function public.update_expense(
+  p_expense_id uuid,
+  p_description text,
+  p_amount_cents bigint,
+  p_paid_by uuid,
+  p_split_mode text,
+  p_category text,
+  p_date date,
+  p_note text,
+  p_participants jsonb,
+  p_expected_updated_at timestamptz default null
+)
+returns public.expenses
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_existing public.expenses;
+  v_updated public.expenses;
+begin
+  if auth.uid() is null then
+    raise exception 'You must be signed in.';
+  end if;
+
+  select * into v_existing from public.expenses where id = p_expense_id;
+  if v_existing.id is null then
+    raise exception 'That expense no longer exists.';
+  end if;
+  if not public.is_group_member(v_existing.group_id, auth.uid()) then
+    raise exception 'You are not a member of this group.';
+  end if;
+
+  if p_expected_updated_at is not null and v_existing.updated_at <> p_expected_updated_at then
+    raise exception 'Somebody else changed this expense while you were editing it. Reload and try again.';
+  end if;
+
+  perform public.assert_expense_valid(v_existing.group_id, p_amount_cents, p_paid_by, p_split_mode, p_participants);
+
+  update public.expenses set
+    description = p_description,
+    amount_cents = p_amount_cents,
+    paid_by = p_paid_by,
+    split_mode = p_split_mode,
+    category = coalesce(p_category, category),
+    date = coalesce(p_date, date),
+    note = coalesce(p_note, ''),
+    updated_by = auth.uid()
+  where id = p_expense_id
+  returning * into v_updated;
+
+  delete from public.expense_participants where expense_id = p_expense_id;
+  insert into public.expense_participants (expense_id, user_id, value)
+  select p_expense_id, (e->>'user_id')::uuid, (e->>'value')::numeric
+  from jsonb_array_elements(p_participants) e;
+
+  insert into public.expense_history (expense_id, group_id, changed_by, action, previous_data)
+  values (v_existing.id, v_existing.group_id, auth.uid(), 'updated', to_jsonb(v_existing));
+
+  return v_updated;
+end;
+$$;
+
+-- ---- create_group / join_group_by_code: record how each member got in ----
+create or replace function public.create_group(p_name text, p_currency text)
+returns public.groups
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  new_group public.groups;
+  v_code text;
+begin
+  if auth.uid() is null then
+    raise exception 'You must be signed in to create a group.';
+  end if;
+
+  -- The publishable key is public by design, so anyone can call this. A cap
+  -- keeps one bored person from filling the database.
+  if (select count(*) from public.group_members
+      where user_id = auth.uid() and role = 'owner') >= 50 then
+    raise exception 'You already own 50 groups, which is the limit.';
+  end if;
+
+  v_code := public.generate_invite_code();
+
+  insert into public.groups (name, currency, invite_code, created_by)
+  values (p_name, coalesce(nullif(p_currency, ''), 'EUR'), v_code, auth.uid())
+  returning * into new_group;
+
+  insert into public.group_members (group_id, user_id, role, joined_via)
+  values (new_group.id, auth.uid(), 'owner', 'created');
+
+  return new_group;
+end;
+$$;
+
+create or replace function public.join_group_by_code(p_code text)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_group_id uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'You must be signed in to join a group.';
+  end if;
+
+  select id into v_group_id
+  from public.groups
+  where invite_code = upper(trim(p_code));
+
+  if v_group_id is null then
+    raise exception 'No group found for that invite code.';
+  end if;
+
+  insert into public.group_members (group_id, user_id, role, joined_via)
+  values (v_group_id, auth.uid(), 'member', 'invite_code')
+  on conflict (group_id, user_id) do nothing;
+
+  return v_group_id;
+end;
+$$;
+
+-- ---- rotate_invite_code: also records when access was last revoked ------
+create or replace function public.rotate_invite_code(p_group_id uuid)
+returns text
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_code text;
+begin
+  if not public.is_group_owner(p_group_id, auth.uid()) then
+    raise exception 'Only the group owner can change the invite code.';
+  end if;
+  v_code := public.generate_invite_code();
+  update public.groups
+    set invite_code = v_code, invite_code_rotated_at = now()
+    where id = p_group_id;
+  return v_code;
+end;
+$$;
+
+-- ---- grants -----------------------------------------------------------
+-- create_expense's signature changed (new 11th argument), so it needs a
+-- fresh grant under its new signature; the rest are re-stated defensively
+-- even though CREATE OR REPLACE on an unchanged signature keeps existing
+-- grants, to keep this section self-contained and match the discipline
+-- every security-definer function in this file follows.
+revoke all on function public.create_expense(uuid, text, text, bigint, uuid, text, text, date, text, jsonb, text) from public;
+grant execute on function public.create_expense(uuid, text, text, bigint, uuid, text, text, date, text, jsonb, text) to authenticated;
+revoke all on function public.update_expense(uuid, text, bigint, uuid, text, text, date, text, jsonb, timestamptz) from public;
+grant execute on function public.update_expense(uuid, text, bigint, uuid, text, text, date, text, jsonb, timestamptz) to authenticated;
+revoke all on function public.create_group(text, text) from public;
+grant execute on function public.create_group(text, text) to authenticated;
+revoke all on function public.join_group_by_code(text) from public;
+grant execute on function public.join_group_by_code(text) to authenticated;
+revoke all on function public.rotate_invite_code(uuid) from public;
+grant execute on function public.rotate_invite_code(uuid) to authenticated;

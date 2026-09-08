@@ -65,6 +65,51 @@ SW.App = SW.App || {};
     return t(count === 1 ? key + '.one' : key + '.other');
   }
 
+  // Server and model errors arrive in English. They are stable, known strings,
+  // so the ones a person is actually likely to hit get mapped into whichever
+  // language is active. Anything unrecognised passes through untouched rather
+  // than being swallowed - a mystery English sentence beats a silent failure.
+  var ERROR_KEYS = [
+    [/exact amounts must add up/i, 'err.exactSum'],
+    [/percentages must add up|percentages must sum/i, 'err.percentSum'],
+    [/shares must be positive/i, 'err.sharesPositive'],
+    [/each participant may only be listed once/i, 'err.duplicateParticipant'],
+    [/at least one participant|needs at least one participant/i, 'err.needParticipant'],
+    [/payer is not a member|payer must be a member/i, 'err.payerNotMember'],
+    [/every participant must be a member/i, 'err.participantNotMember'],
+    [/no group found for that invite code/i, 'err.badInviteCode'],
+    [/somebody else changed this expense/i, 'err.editConflict'],
+    [/that expense no longer exists/i, 'err.expenseGone'],
+    [/only the group owner can delete/i, 'err.ownerOnlyDelete'],
+    [/only the group owner can change the invite code/i, 'err.ownerOnlyRotate'],
+    [/only the current owner can hand over/i, 'err.ownerOnlyTransfer'],
+    [/this person appears in an expense/i, 'err.memberInExpense'],
+    [/you own this group/i, 'err.ownerCannotLeave'],
+    [/you are not a member of this group/i, 'err.notAMember'],
+    [/you already own \d+ groups/i, 'err.groupLimit'],
+    [/description is required/i, 'err.descriptionRequired'],
+    [/amount must be a positive/i, 'err.amountPositive'],
+    [/failed to fetch|network|load failed/i, 'err.network']
+  ];
+
+  function translateError(message) {
+    var text = String(message || '').trim();
+    if (!text) return text;
+    for (var i = 0; i < ERROR_KEYS.length; i++) {
+      if (ERROR_KEYS[i][0].test(text)) {
+        var translated = t(ERROR_KEYS[i][1]);
+        // t() returns the key itself when it is missing; do not show that.
+        if (translated && translated !== ERROR_KEYS[i][1]) return translated;
+      }
+    }
+    return text;
+  }
+
+  // Above this many rows the list is trimmed until the reader asks for more.
+  // Chosen to be far beyond a normal friend group, so nobody ever meets it
+  // by accident.
+  var EXPENSE_RENDER_LIMIT = 150;
+
   var CATEGORY_ICONS = {
     general: '🧾',
     food: '🍔',
@@ -147,6 +192,7 @@ SW.App = SW.App || {};
   // --------------------------------------------------------------------
   var ui = {
     expandedExpenseIds: {},    // expenseId -> true, for the expandable rows
+    showAllExpenses: false,    // true once the reader asks for the full list
     editingExpenseId: null,    // set while the expense modal is in edit mode
     splitMode: 'equal',        // active tab in the expense modal
     selectedParticipants: {},  // memberId -> true, checkboxes in the expense modal
@@ -314,6 +360,31 @@ SW.App = SW.App || {};
     };
   }
 
+  // Display names are free text and NOT unique, so two people called "Nils"
+  // are indistinguishable in a payer dropdown or a balances row. In an app
+  // about who owes whom that is a real problem, so when names collide each
+  // gets a short suffix - their email if we have one, otherwise the tail of
+  // their id. Unique names get nothing, so the common case stays clean.
+  function memberHint(member) {
+    if (!member) return '';
+    if (member.email) return member.email;
+    return '…' + String(member.id || '').slice(-4);
+  }
+
+  function makeDisambiguator(group) {
+    var counts = {};
+    group.members.forEach(function (m) {
+      var key = String(m.name || '').trim().toLowerCase();
+      counts[key] = (counts[key] || 0) + 1;
+    });
+    return function (member) {
+      if (!member) return '';
+      var key = String(member.name || '').trim().toLowerCase();
+      if ((counts[key] || 0) < 2) return '';
+      return ' <span class="member-disambiguator">' + esc(memberHint(member)) + '</span>';
+    };
+  }
+
   function computeExpenseSplit(expense) {
     var result = SW.Model.splitExpense(expense.amountCents, expense.splitMode, expense.participants);
     return result.ok ? result.shares : [];
@@ -422,13 +493,147 @@ SW.App = SW.App || {};
       return;
     }
 
-    // Replacing innerHTML resets scrollTop, which would otherwise throw the
-    // reader back to the top of a long expense list every time anything
-    // changed - including just expanding a row to see its breakdown.
+    // Replacing innerHTML throws away scroll position, keyboard focus and any
+    // text selection inside the panel. That is fine when the user caused the
+    // re-render, and jarring when a friend's change arrived over realtime
+    // while they were part-way through something. Capture, replace, restore.
     var previousScroll = mainEl.scrollTop;
+    var focusSnapshot = captureFocusWithin(mainEl);
+
     mainEl.innerHTML = renderGroupViewHTML(group, state);
     wireGroupView(group, state);
+
     mainEl.scrollTop = previousScroll;
+    restoreFocus(focusSnapshot);
+  }
+
+  // The undo action used to live only inside a toast that removed itself
+  // after a few seconds. Anything deleted also goes here, so it can still be
+  // restored minutes later. This is a per-session, in-memory list; it is not
+  // a server-side trash, and it says so in the dialog.
+  var recentlyDeleted = [];
+  var RECENTLY_DELETED_LIMIT = 25;
+
+  function rememberDeleted(expense, groupName) {
+    recentlyDeleted.unshift({
+      expense: JSON.parse(JSON.stringify(expense)),
+      groupName: groupName || '',
+      deletedAt: Date.now()
+    });
+    if (recentlyDeleted.length > RECENTLY_DELETED_LIMIT) recentlyDeleted.length = RECENTLY_DELETED_LIMIT;
+  }
+
+  function restoreDeleted(expenseId) {
+    var entry = recentlyDeleted.find(function (r) { return r.expense.id === expenseId; });
+    if (!entry) return { ok: false, error: t('recentlyDeleted.emptyBody') };
+    var e = entry.expense;
+    var payload = {
+      groupId: e.groupId,
+      description: e.description,
+      amountCents: e.amountCents,
+      paidBy: e.paidBy,
+      splitMode: e.splitMode,
+      participants: e.participants,
+      category: e.category,
+      date: e.date,
+      note: e.note,
+      createdAt: e.createdAt
+    };
+    var result;
+    if (e.type === 'settlement') {
+      var receiver = (e.participants && e.participants[0]) || {};
+      result = store().dispatch({ type: 'ADD_SETTLEMENT', payload: {
+        groupId: e.groupId, from: e.paidBy, to: receiver.memberId,
+        amountCents: e.amountCents, date: e.date, createdAt: e.createdAt } });
+    } else {
+      result = store().dispatch({ type: 'ADD_EXPENSE', payload: payload });
+    }
+    if (result && result.ok) {
+      recentlyDeleted = recentlyDeleted.filter(function (r) { return r.expense.id !== expenseId; });
+    }
+    return result;
+  }
+
+  function renderRecentlyDeleted() {
+    var list = qs('#recentlyDeletedList');
+    var empty = qs('#recentlyDeletedEmpty');
+    if (!list || !empty) return;
+
+    if (recentlyDeleted.length === 0) {
+      list.innerHTML = '';
+      empty.hidden = false;
+      return;
+    }
+    empty.hidden = true;
+    list.innerHTML = recentlyDeleted.map(function (r) {
+      var currency = 'EUR';
+      var g = (lastState && lastState.groups || []).find(function (x) { return x.id === r.expense.groupId; });
+      if (g) currency = g.currency;
+      return (
+        '<li class="recently-deleted-row">' +
+        '<span class="recently-deleted-name">' + esc(r.expense.description) + '</span> ' +
+        '<span class="recently-deleted-meta">' + esc(fmtMoney(r.expense.amountCents, currency)) +
+        (r.groupName ? ' · ' + esc(r.groupName) : '') + '</span>' +
+        '<button type="button" class="btn btn-sm restore-expense-btn" data-id="' + esc(r.expense.id) + '">' +
+        esc(t('common.restore')) + '</button>' +
+        '</li>'
+      );
+    }).join('');
+
+    qsa('.restore-expense-btn', list).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var result = restoreDeleted(btn.getAttribute('data-id'));
+        if (result && result.ok) {
+          showToast(t('toast.restored'));
+          renderRecentlyDeleted();
+        } else {
+          showToast(translateError(result && result.error) || t('toast.restoreFailed'));
+        }
+      });
+    });
+  }
+
+  // Remembers WHICH element had focus in a way that survives the element
+  // itself being destroyed: by a stable selector rather than a reference.
+  function captureFocusWithin(container) {
+    var active = document.activeElement;
+    if (!active || !container.contains(active) || active === document.body) return null;
+
+    var selector = null;
+    if (active.id) {
+      selector = '#' + active.id;
+    } else {
+      // Rows and buttons carry data-id / data-member, which survive a repaint.
+      var key = active.getAttribute('data-id') || active.getAttribute('data-member');
+      var cls = (active.className || '').toString().trim().split(/\s+/)[0];
+      if (key && cls) selector = '.' + cls + '[data-id="' + key + '"], .' + cls + '[data-member="' + key + '"]';
+    }
+    if (!selector) return null;
+
+    return {
+      selector: selector,
+      start: typeof active.selectionStart === 'number' ? active.selectionStart : null,
+      end: typeof active.selectionEnd === 'number' ? active.selectionEnd : null
+    };
+  }
+
+  function restoreFocus(snapshot) {
+    if (!snapshot) return;
+    var el;
+    try {
+      el = qs(snapshot.selector);
+    } catch (err) {
+      return; // a malformed selector must never break a render
+    }
+    if (!el || typeof el.focus !== 'function') return;
+    el.focus();
+    if (snapshot.start !== null && typeof el.setSelectionRange === 'function') {
+      try {
+        el.setSelectionRange(snapshot.start, snapshot.end);
+      } catch (err) {
+        // Not every input type supports a selection range; ignore.
+      }
+    }
   }
 
   function renderNoGroupsEmptyState() {
@@ -501,11 +706,12 @@ SW.App = SW.App || {};
   }
 
   function renderMemberChips(group) {
+    var disambiguate = makeDisambiguator(group);
     var chips = group.members
       .map(function (m) {
         return (
           '<span class="chip">' +
-          esc(m.name) +
+          esc(m.name) + disambiguate(m) +
           ' <button type="button" class="icon-btn remove-member-btn" data-member="' +
           esc(m.id) +
           '" aria-label="' +
@@ -517,20 +723,22 @@ SW.App = SW.App || {};
     // Offline you invent members by typing a name. Signed in, a member is a
     // real account, so the only way to add one is to share the invite code.
     var action = isRemote()
-      ? ' <button type="button" class="btn btn-sm" id="inviteMemberBtn">' + esc(t('group.invite')) + '</button>'
+      ? ' <button type="button" class="btn btn-sm" id="inviteMemberBtn">' + esc(t('group.invite')) + '</button>' +
+        ' <button type="button" class="btn btn-sm" id="viewMembersBtn">' + esc(t('members.title')) + '</button>'
       : ' <button type="button" class="btn btn-sm" id="addMemberBtn">' + esc(t('group.addMember')) + '</button>';
     return chips + action;
   }
 
   function renderBalancesPanel(group, state) {
     var balances = SW.Model.computeBalances(group.id, state.groups, state.expenses);
+    var disambiguate = makeDisambiguator(group);
     var rows = group.members
       .map(function (m) {
         var net = balances[m.id] || 0;
         var cls = net > 0 ? 'positive' : net < 0 ? 'negative' : 'zero';
         return (
           '<div class="balance-row"><span>' +
-          esc(m.name) +
+          esc(m.name) + disambiguate(m) +
           '</span><span class="balance-figure ' +
           cls +
           '">' +
@@ -593,11 +801,26 @@ SW.App = SW.App || {};
     });
 
     var memberName = makeMemberNameLookup(group);
-    var rows = sorted
+
+    // Only the most recent rows are painted. Balances are still computed from
+    // EVERY expense - capping what is fetched would silently produce wrong
+    // numbers, which is far worse than a long list. This caps only the DOM.
+    var limit = ui.showAllExpenses ? sorted.length : EXPENSE_RENDER_LIMIT;
+    var visible = sorted.slice(0, limit);
+    var hidden = sorted.length - visible.length;
+
+    var rows = visible
       .map(function (e) {
         return renderExpenseRow(group, e, memberName);
       })
       .join('');
+
+    if (hidden > 0) {
+      rows +=
+        '<button type="button" class="btn btn-block" id="showAllExpensesBtn">' +
+        esc(t('expense.showOlder', { count: hidden })) +
+        '</button>';
+    }
     return '<ul class="expense-list">' + rows + '</ul>';
   }
 
@@ -641,6 +864,10 @@ SW.App = SW.App || {};
     var currentUserId = lastState && lastState.ui ? lastState.ui.currentUserId : null;
 
     var shareText = t('expense.notInvolved');
+    // "Not involved" on its own reads like a bug to whoever it happens to.
+    // It is almost always because the expense predates them joining, so the
+    // label carries that explanation rather than leaving them to guess.
+    var shareTitle = t('expense.notInvolvedHint');
     var shareClass = '';
     var involved = currentUserId != null && (shareByMember.hasOwnProperty(currentUserId) || expense.paidBy === currentUserId);
     if (involved) {
@@ -686,6 +913,9 @@ SW.App = SW.App || {};
       '</div>' +
       '<div class="expense-share ' +
       shareClass +
+      (involved ? '' : ' expense-not-involved-hint') +
+      '" title="' +
+      esc(involved ? '' : shareTitle) +
       '">' +
       esc(shareText) +
       '</div>' +
@@ -740,6 +970,14 @@ SW.App = SW.App || {};
     var settleBtn = qs('#settleUpBtn');
     if (settleBtn) settleBtn.addEventListener('click', function () { openSettleModal(group); });
 
+    var showAllBtn = qs('#showAllExpensesBtn');
+    if (showAllBtn) {
+      showAllBtn.addEventListener('click', function () {
+        ui.showAllExpenses = true;
+        render(lastState);
+      });
+    }
+
     var emptyAddBtn = qs('#emptyAddExpenseBtn');
     if (emptyAddBtn) emptyAddBtn.addEventListener('click', function () { openExpenseModal(group, null); });
 
@@ -751,7 +989,7 @@ SW.App = SW.App || {};
           value: group.name
         }, function (name) {
           var result = store().dispatch({ type: 'RENAME_GROUP', payload: { groupId: group.id, name: name } });
-          showToast(result && result.ok ? t('group.renamed') : (result && result.error) || t('group.renameFailed'));
+          showToast(result && result.ok ? t('group.renamed') : translateError(result && result.error) || t('group.renameFailed'));
         });
       });
     }
@@ -778,10 +1016,12 @@ SW.App = SW.App || {};
               ? t('group.deleteBody.sharedSuffix', { count: group.members.length, memberWord: unit(group.members.length, 'unit.member') })
               : '') +
             t('group.deleteBody.cannotUndo'),
-          requireText: group.name
+          requireText: group.name,
+          offerExport: true,
+          exportName: group.name
         }, function () {
           var result = store().dispatch({ type: 'DELETE_GROUP', payload: { groupId: group.id } });
-          showToast(result && result.ok ? t('group.deleted') : (result && result.error) || t('group.deleteFailed'));
+          showToast(result && result.ok ? t('group.deleted') : translateError(result && result.error) || t('group.deleteFailed'));
           if (result && result.ok && SW.Router) SW.Router.replaceRoot();
         });
       });
@@ -789,6 +1029,14 @@ SW.App = SW.App || {};
 
     // Shared mode swaps "+ Member" for "Invite", since a member is an
     // account that has to join rather than a name you can type in.
+    var membersBtn = qs('#viewMembersBtn');
+    if (membersBtn) {
+      membersBtn.addEventListener('click', function () {
+        renderMembersModal(group);
+        openModal(qs('#membersModal'));
+      });
+    }
+
     var inviteBtn = qs('#inviteMemberBtn');
     if (inviteBtn) {
       inviteBtn.addEventListener('click', function () {
@@ -805,7 +1053,7 @@ SW.App = SW.App || {};
           hint: t('group.addMemberHint')
         }, function (name) {
           var result = store().dispatch({ type: 'ADD_MEMBER', payload: { groupId: group.id, name: name } });
-          showToast(result && result.ok ? t('group.memberAdded') : (result && result.error) || t('group.memberAddFailed'));
+          showToast(result && result.ok ? t('group.memberAdded') : translateError(result && result.error) || t('group.memberAddFailed'));
         });
       });
     }
@@ -819,7 +1067,7 @@ SW.App = SW.App || {};
           type: 'REMOVE_MEMBER',
           payload: { groupId: group.id, memberId: memberId, userId: memberId }
         });
-        showToast(result && result.ok ? t('group.memberRemoved') : (result && result.error) || t('group.memberRemoveFailed'));
+        showToast(result && result.ok ? t('group.memberRemoved') : translateError(result && result.error) || t('group.memberRemoveFailed'));
       });
     });
 
@@ -835,7 +1083,7 @@ SW.App = SW.App || {};
           type: 'ADD_SETTLEMENT',
           payload: { groupId: group.id, from: s.from, to: s.to, amountCents: s.amountCents, date: todayISO() }
         });
-        showToast(result && result.ok ? t('settle.recorded') : (result && result.error) || t('settle.recordFailed'));
+        showToast(result && result.ok ? t('settle.recorded') : translateError(result && result.error) || t('settle.recordFailed'));
       });
     });
 
@@ -875,9 +1123,13 @@ SW.App = SW.App || {};
     var expense = state.expenses.find(function (e) { return e.id === expenseId; });
     if (!expense) return;
 
+    var groupForTrash = (state.groups || []).find(function (g) { return g.id === expense.groupId; });
     var result = store().dispatch({ type: 'DELETE_EXPENSE', payload: { expenseId: expenseId } });
+    if (result && result.ok) {
+      rememberDeleted(expense, groupForTrash ? groupForTrash.name : '');
+    }
     if (!result || !result.ok) {
-      showToast((result && result.error) || t('expense.deleteFailed'));
+      showToast(translateError(result && result.error) || t('expense.deleteFailed'));
       return;
     }
 
@@ -893,7 +1145,8 @@ SW.App = SW.App || {};
               from: expense.paidBy,
               to: receiver.memberId,
               amountCents: expense.amountCents,
-              date: expense.date
+              date: expense.date,
+              createdAt: expense.createdAt
             }
           });
         } else {
@@ -908,7 +1161,10 @@ SW.App = SW.App || {};
               participants: expense.participants,
               category: expense.category,
               date: expense.date,
-              note: expense.note
+              note: expense.note,
+              // Carry the original timestamp so it returns to its old place
+              // in the list instead of reappearing at the top as if new.
+              createdAt: expense.createdAt
             }
           });
         }
@@ -918,7 +1174,7 @@ SW.App = SW.App || {};
         if (restored && restored.ok) {
           showToast(t('expense.restored'));
         } else {
-          showToast((restored && restored.error) || t('expense.restoreFailed'));
+          showToast(translateError(restored && restored.error) || t('expense.restoreFailed'));
         }
       }
     });
@@ -1225,7 +1481,7 @@ SW.App = SW.App || {};
       }
 
       if (!result || !result.ok) {
-        qs('#expenseFormError').textContent = (result && result.error) || t('expense.saveFailed');
+        qs('#expenseFormError').textContent = translateError(result && result.error) || t('expense.saveFailed');
         return;
       }
 
@@ -1255,10 +1511,15 @@ SW.App = SW.App || {};
 
       var result = store().dispatch({
         type: 'ADD_SETTLEMENT',
-        payload: { groupId: group.id, from: from, to: to, amountCents: amountCents, date: date }
+        payload: {
+          groupId: group.id, from: from, to: to, amountCents: amountCents, date: date,
+          // How the money actually moved. Optional, because sometimes it was
+          // just cash across a table and nobody wants a form about it.
+          settlementMethod: (qs('#settleMethodSelect') || {}).value || null
+        }
       });
       if (!result || !result.ok) {
-        errorEl.textContent = (result && result.error) || t('settle.recordFailed');
+        errorEl.textContent = translateError(result && result.error) || t('settle.recordFailed');
         return;
       }
       closeModal(qs('#settleModalOverlay'));
@@ -1301,7 +1562,7 @@ SW.App = SW.App || {};
       var result = store().dispatch({ type: 'ADD_GROUP', payload: payload });
       if (release) release();
       if (!result || !result.ok) {
-        errorEl.textContent = (result && result.error) || t('group.createFailed');
+        errorEl.textContent = translateError(result && result.error) || t('group.createFailed');
         return;
       }
       closeModal(qs('#groupModalOverlay'));
@@ -1364,7 +1625,7 @@ SW.App = SW.App || {};
           return;
         }
         var result = store().importJSON(String(reader.result));
-        showToast(result && result.ok ? t('data.imported') : (result && result.error) || t('data.importFailed'));
+        showToast(result && result.ok ? t('data.imported') : translateError(result && result.error) || t('data.importFailed'));
         e.target.value = '';
       };
       reader.onerror = function () {
@@ -1520,6 +1781,17 @@ SW.App = SW.App || {};
     qs('#confirmBody').innerHTML = opts.bodyHtml || esc(opts.body || '');
     qs('#confirmOkBtn').textContent = opts.confirmLabel || t('common.delete');
     qs('#confirmError').textContent = '';
+    // Deleting a group destroys everyone's history with no server-side undo.
+    // Offering a download first turns an irreversible act into a recoverable
+    // one, at least for whoever clicks it.
+    var exportBtn = qs('#exportBeforeDeleteBtn');
+    if (exportBtn) {
+      exportBtn.hidden = !opts.offerExport;
+      exportBtn.onclick = opts.offerExport
+        ? function () { downloadStateSnapshot(opts.exportName || 'splitwise'); }
+        : null;
+    }
+
     var row = qs('#confirmTypeRow');
     var input = qs('#confirmTypeInput');
     input.value = '';
@@ -1565,6 +1837,19 @@ SW.App = SW.App || {};
       if (fn) fn();
     });
 
+    var recentBtn = qs('#recentlyDeletedBtn');
+    if (recentBtn) {
+      recentBtn.addEventListener('click', function () {
+        // closeDataMenu() is private to wireStaticEvents, so close it here.
+        var menu = qs('#dataMenu');
+        if (menu) menu.hidden = true;
+        var menuBtn = qs('#dataMenuBtn');
+        if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
+        renderRecentlyDeleted();
+        openModal(qs('#recentlyDeletedModal'));
+      });
+    }
+
     var dismiss = qs('#errorBannerDismiss');
     if (dismiss) dismiss.addEventListener('click', clearErrorBanner);
   }
@@ -1604,6 +1889,22 @@ SW.App = SW.App || {};
     el.classList.toggle('is-error', status.state === 'error');
     el.hidden = false;
 
+    // "N changes waiting to sync" - the offline queue made visible. Without
+    // this the queue would be a silent promise.
+    var queuedEl = qs('#queuedIndicator');
+    if (queuedEl) {
+      var queued = status.queued || 0;
+      queuedEl.hidden = queued === 0;
+      if (queued > 0) queuedEl.textContent = t('sync.queuedChanges', { count: queued });
+    }
+
+    if (status.state === 'queued') {
+      el.hidden = false;
+      el.classList.remove('is-error');
+      el.textContent = t('sync.saving');
+      return;
+    }
+
     if (status.state === 'saving') {
       el.textContent = t('sync.saving');
     } else if (status.state === 'saved') {
@@ -1615,7 +1916,7 @@ SW.App = SW.App || {};
       syncStatusTimer = setTimeout(function () { el.hidden = true; }, 1500);
     } else {
       el.textContent = t('sync.notSaved');
-      showErrorBanner(status.message || t('sync.errorBannerDefault'));
+      showErrorBanner(translateError(status.message) || t('sync.errorBannerDefault'));
     }
   }
 
@@ -1681,6 +1982,8 @@ SW.App = SW.App || {};
   }
 
   // Shared mode: one set of books for the whole group, in Supabase.
+  var migrationOffered = false;
+
   function startRemoteMode() {
     activeStore = SW.RemoteStore;
     subscribed = false;
@@ -1699,6 +2002,12 @@ SW.App = SW.App || {};
         setSyncStatus({ state: 'saved' });
         render(SW.RemoteStore.getState());
         applyPendingUrlIntent();
+        // Only worth asking when they have nothing here yet and something
+        // there - otherwise it is a pointless dialog every sign-in.
+        if (!migrationOffered && SW.RemoteStore.getState().groups.length === 0) {
+          migrationOffered = true;
+          offerDemoMigration();
+        }
       })
       .catch(function (err) {
         setSyncStatus({
@@ -1730,6 +2039,104 @@ SW.App = SW.App || {};
       }
       pendingGroupFromUrl = null;
     }
+  }
+
+  // Demo mode writes to localStorage; signing up used to silently abandon
+  // all of it. Now, if there is local work worth keeping, the user is asked
+  // once, and it is copied into their account as real groups and expenses.
+  function localDataWorthKeeping() {
+    var local = null;
+    try {
+      local = SW.Store.getState();
+    } catch (err) {
+      return null;
+    }
+    if (!local || !local.groups || !local.groups.length) return null;
+    return local;
+  }
+
+  function offerDemoMigration() {
+    var local = localDataWorthKeeping();
+    var modal = qs('#migrateDemoModal');
+    if (!local || !modal) return;
+
+    var body = qs('#migrateDemoBody');
+    if (body) {
+      body.textContent = t('migrate.body', {
+        groups: local.groups.length,
+        expenses: local.expenses ? local.expenses.length : 0
+      });
+    }
+    openModal(modal);
+
+    var confirmBtn = qs('#migrateConfirmBtn');
+    var skipBtn = qs('#migrateSkipBtn');
+
+    function finish() {
+      closeModal(modal);
+    }
+
+    if (skipBtn) {
+      skipBtn.onclick = function () { finish(); };
+    }
+    if (confirmBtn) {
+      confirmBtn.onclick = function () {
+        confirmBtn.disabled = true;
+        migrateLocalData(local).then(function (summary) {
+          confirmBtn.disabled = false;
+          finish();
+          showToast(t('migrate.done', { groups: summary.groups, expenses: summary.expenses }));
+        });
+      };
+    }
+  }
+
+  // Copies each local group and its expenses through the normal dispatch
+  // path, so everything is validated exactly as if it had been typed in.
+  // Members cannot come across - they were names, not accounts - so every
+  // expense is re-pointed at the signed-in user.
+  function migrateLocalData(local) {
+    var me = SW.Auth.getUser();
+    if (!me) return Promise.resolve({ groups: 0, expenses: 0 });
+
+    var madeGroups = 0;
+    var madeExpenses = 0;
+    var chain = Promise.resolve();
+
+    local.groups.forEach(function (g) {
+      chain = chain.then(function () {
+        var res = store().dispatch({ type: 'ADD_GROUP', payload: { name: g.name, currency: g.currency } });
+        if (!res || !res.ok) return;
+        madeGroups += 1;
+        // Give the server a moment to hand back the real group id.
+        return new Promise(function (resolve) { setTimeout(resolve, 700); }).then(function () {
+          var state = store().getState();
+          var created = state.groups.filter(function (x) { return x.name === g.name; }).pop();
+          if (!created) return;
+          (local.expenses || [])
+            .filter(function (e) { return e.groupId === g.id && e.type !== 'settlement'; })
+            .forEach(function (e) {
+              var r = store().dispatch({ type: 'ADD_EXPENSE', payload: {
+                groupId: created.id,
+                description: e.description,
+                amountCents: e.amountCents,
+                paidBy: me.id,
+                splitMode: 'equal',
+                participants: [{ memberId: me.id, value: 1 }],
+                category: e.category,
+                date: e.date,
+                note: e.note,
+                createdAt: e.createdAt
+              } });
+              if (r && r.ok) madeExpenses += 1;
+            });
+        });
+      });
+    });
+
+    return chain.then(function () {
+      return { groups: madeGroups, expenses: madeExpenses };
+    });
   }
 
   function wireAuthEvents() {
@@ -1817,7 +2224,7 @@ SW.App = SW.App || {};
           // so this cannot be used to find out who has an account.
           if (hint) hint.hidden = false;
           if (!result || !result.ok) {
-            if (err) err.textContent = (result && result.error) || '';
+            if (err) err.textContent = translateError(result && result.error) || '';
           }
         });
       });
@@ -1841,7 +2248,7 @@ SW.App = SW.App || {};
             showAuthPane('signin');
             showToast(t('auth.passwordUpdated'));
           } else if (err) {
-            err.textContent = (result && result.error) || '';
+            err.textContent = translateError(result && result.error) || '';
           }
         });
       });
@@ -1897,7 +2304,7 @@ SW.App = SW.App || {};
             return;
           }
           if (errorEl) {
-            errorEl.textContent = (result && result.error) || t('auth.signInFailed');
+            errorEl.textContent = translateError(result && result.error) || t('auth.signInFailed');
           }
           // Account made but not yet usable: put them on the sign-in tab.
           if (result && result.needsConfirmation) setAuthMode('signin');
@@ -1979,7 +2386,7 @@ SW.App = SW.App || {};
             // Consume the invite link so refreshing does not reopen the dialog.
             if (SW.Router) SW.Router.replaceRoot();
           } else if (errorEl) {
-            errorEl.textContent = (outcome && outcome.error) || t('join.failed');
+            errorEl.textContent = translateError(outcome && outcome.error) || t('join.failed');
           }
         }
 
@@ -1991,7 +2398,7 @@ SW.App = SW.App || {};
         // A store that rejects the action outright (offline mode, or a
         // malformed code) answers immediately and never calls back.
         if (!result || !result.ok) {
-          finished({ ok: false, error: (result && result.error) || t('join.failed') });
+          finished({ ok: false, error: translateError(result && result.error) || t('join.failed') });
         }
       });
     }
@@ -2026,6 +2433,57 @@ SW.App = SW.App || {};
     var linkBtn = qs('#copyInviteLinkBtn');
     if (linkBtn) linkBtn.hidden = !inviteLinkForCurrentGroup;
     openModal(qs('#inviteModal'));
+  }
+
+  function downloadStateSnapshot(name) {
+    try {
+      var json = store().exportJSON();
+      var blob = new Blob([json], { type: 'application/json' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'splitwise-' + String(name).replace(/[^a-z0-9]+/gi, '-').toLowerCase() +
+        '-' + todayISO() + '.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast(t('toast.exported'));
+    } catch (err) {
+      showToast(t('toast.exportFailed'));
+    }
+  }
+
+  // Who is in this group, when they joined, and how they got in. Makes the
+  // invite code auditable: before this, a code was a bare secret with no way
+  // to see who had used it.
+  function renderMembersModal(group) {
+    var list = qs('#membersList');
+    var empty = qs('#membersEmpty');
+    if (!list || !empty) return;
+
+    if (!group || !group.members.length) {
+      list.innerHTML = '';
+      empty.hidden = false;
+      return;
+    }
+    empty.hidden = true;
+    var disambiguate = makeDisambiguator(group);
+
+    list.innerHTML = group.members.map(function (m) {
+      var how = m.joinedVia === 'created' ? t('members.methodCreated')
+        : m.joinedVia === 'invite_code' ? t('members.methodJoinedCode')
+        : '';
+      var when = m.joinedAt ? formatDateDisplay(String(m.joinedAt).slice(0, 10)) : '';
+      var meta = [when ? t('members.joinedOn', { date: when }) : '', how]
+        .filter(function (x) { return x; }).join(' · ');
+      return (
+        '<li class="member-row">' +
+        '<span class="member-row-name">' + esc(m.name) + disambiguate(m) + '</span>' +
+        (meta ? '<span class="member-row-meta">' + esc(meta) + '</span>' : '') +
+        '</li>'
+      );
+    }).join('');
   }
 
   function copyText(text, okMessage) {

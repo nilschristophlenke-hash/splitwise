@@ -1216,3 +1216,108 @@ select#groupCurrencySelect {
   pointer-events: none;
   user-select: none;
 }
+
+/* ==========================================================================
+   Class-wide [hidden] safety net
+   An author rule that sets `display` always beats the browser's built-in
+   `[hidden] { display: none }` rule, no matter the origin. Both .btn and
+   .icon-btn set their own `display`, and by now several ids/classes built
+   on top of them (below, and more to come) are toggled with el.hidden - so
+   fix it once here instead of chasing every new id that needs it.
+   ========================================================================== */
+.btn[hidden],
+.icon-btn[hidden] {
+  display: none !important;
+}
+
+/* ---- Recently deleted / history / members modals ------------------------- */
+.recently-deleted-list,
+.history-list,
+.members-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.recently-deleted-row,
+.history-row,
+.member-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+
+.recently-deleted-row:last-child,
+.history-row:last-child,
+.member-row:last-child {
+  border-bottom: none;
+}
+
+.member-row {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.member-row-name {
+  font-weight: 600;
+}
+
+.member-row-meta,
+.history-row-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Small muted suffix next to a member's name (email or short id), shown
+   only when two members in the same group share a display name. */
+.member-disambiguator {
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+/* Empty states inside these modals are toggled with el.hidden, and
+   .empty-state (further up this file) sets `display: flex` - same [hidden]
+   problem as .btn/.icon-btn above, fixed once for the whole class. */
+.empty-state[hidden] {
+  display: none !important;
+}
+
+/* ---- "Not involved" explanation ------------------------------------------ */
+/* Reusable hint shown next to an expense a member is not part of, because
+   they joined the group after the expense was added. Styled like .hint;
+   no `display` override needed since app.js only includes this in the
+   markup when it applies, rather than toggling it with el.hidden. */
+.expense-not-involved-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ---- Offline / queued-changes indicator (header) -------------------------- */
+/* Sits next to #syncStatus; app.js toggles `hidden` on it, and it sets
+   `display` below, so it needs the [hidden] override. */
+.queued-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  border: 1px solid var(--warn);
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.queued-indicator[hidden] {
+  display: none !important;
+}
