@@ -161,6 +161,8 @@ var SW = SW || {};
       showSection('journey');
     }
 
+
+
     if (isAuthed()) {
       reveal();
     }
@@ -426,6 +428,213 @@ var SW = SW || {};
   // render as a separate band below the spine.
   // ----------------------------------------------------------------------
 
+  // ----------------------------------------------------------------------
+  // The flowchart
+  //
+  // One diagram of the whole app: squares for actions, diamonds for
+  // decisions, stadiums for the start and the finish. Layout is computed
+  // from the (col, row) grid in SW.Workflows.FLOWCHART, so inserting a node
+  // never means recalculating coordinates by hand.
+  // ----------------------------------------------------------------------
+
+  var FC = {
+    colW: 250,     // horizontal spacing between grid columns
+    rowH: 132,     // vertical spacing between grid rows
+    padX: 110,     // room at the sides for the loop-back lanes
+    padY: 40,
+    box: { w: 186, h: 62 },
+    diamond: { w: 190, h: 92 },
+  };
+
+  function fcCentre(node) {
+    return {
+      x: FC.padX + node.col * FC.colW + FC.box.w / 2,
+      y: FC.padY + node.row * FC.rowH + FC.box.h / 2,
+    };
+  }
+
+  function fcSize(node) {
+    return node.kind === 'decision' ? FC.diamond : FC.box;
+  }
+
+  // Where an edge should leave/enter a node, given the direction of travel.
+  function fcPort(node, side) {
+    var c = fcCentre(node);
+    var s = fcSize(node);
+    if (side === 'top') return { x: c.x, y: c.y - s.h / 2 };
+    if (side === 'bottom') return { x: c.x, y: c.y + s.h / 2 };
+    if (side === 'left') return { x: c.x - s.w / 2, y: c.y };
+    return { x: c.x + s.w / 2, y: c.y };
+  }
+
+  function fcShape(node) {
+    var c = fcCentre(node);
+    var s = fcSize(node);
+    var cls = 'fc-node fc-' + node.kind;
+    var body;
+
+    if (node.kind === 'decision') {
+      var pts = [
+        c.x + ',' + (c.y - s.h / 2),
+        (c.x + s.w / 2) + ',' + c.y,
+        c.x + ',' + (c.y + s.h / 2),
+        (c.x - s.w / 2) + ',' + c.y,
+      ].join(' ');
+      body = '<polygon class="fc-shape" points="' + pts + '" />';
+    } else if (node.kind === 'io') {
+      // Parallelogram: something the person types in.
+      var skew = 16;
+      var l = c.x - s.w / 2, r = c.x + s.w / 2, tp = c.y - s.h / 2, bt = c.y + s.h / 2;
+      body = '<polygon class="fc-shape" points="' +
+        (l + skew) + ',' + tp + ' ' + r + ',' + tp + ' ' +
+        (r - skew) + ',' + bt + ' ' + l + ',' + bt + '" />';
+    } else {
+      var radius = (node.kind === 'start' || node.kind === 'terminal') ? s.h / 2 : 12;
+      body = '<rect class="fc-shape" x="' + (c.x - s.w / 2) + '" y="' + (c.y - s.h / 2) +
+        '" width="' + s.w + '" height="' + s.h + '" rx="' + radius + '" ry="' + radius + '" />';
+    }
+
+    var label = '<text class="fc-label" x="' + c.x + '" y="' + (node.sub ? c.y - 4 : c.y + 5) +
+      '" text-anchor="middle">' + esc(node.label) + '</text>';
+    var sub = node.sub
+      ? '<text class="fc-sub" x="' + c.x + '" y="' + (c.y + 14) + '" text-anchor="middle">' + esc(node.sub) + '</text>'
+      : '';
+
+    var gapMark = node.hasGap
+      ? '<circle class="fc-gap-dot" cx="' + (c.x + s.w / 2 - 10) + '" cy="' + (c.y - s.h / 2 + 10) + '" r="7" />' +
+        '<text class="fc-gap-mark" x="' + (c.x + s.w / 2 - 10) + '" y="' + (c.y - s.h / 2 + 14) +
+        '" text-anchor="middle">!</text>'
+      : '';
+
+    var name = node.label + (node.sub ? ', ' + node.sub : '') +
+      (node.hasGap ? '. Has a known gap.' : '');
+
+    return '<g class="' + cls + '" tabindex="0" role="button" data-ref="' + esc(node.ref || '') +
+      '" aria-label="' + esc(name) + '"><title>' + esc(name) + '</title>' +
+      body + label + sub + gapMark + '</g>';
+  }
+
+  // Orthogonal routing. Straight where it can be, an elbow where it must be,
+  // and out into a side lane for anything that loops backwards - which is
+  // what stops the arrows crossing the boxes.
+  function fcPath(from, to, edge, bounds) {
+    var a, b, d;
+    var goingBack = to.row <= from.row;
+
+    // Same row is always a straight horizontal, whatever the route says.
+    // Sending a same-row edge out to a side lane draws it back through its
+    // own box, which is what "Sign in -> Signed in?" used to look like.
+    if (from.row === to.row) {
+      var leftward0 = to.col < from.col;
+      a = fcPort(from, leftward0 ? 'left' : 'right');
+      b = fcPort(to, leftward0 ? 'right' : 'left');
+      return { d: 'M' + a.x + ',' + a.y + ' H' + b.x, a: a, b: b, horizontal: true };
+    }
+
+    // A second, further-out lane so two loop-backs on the same side do not
+    // draw on top of each other.
+    if (edge.route === 'around-left-far') {
+      var laneFar = 18;
+      a = fcPort(from, 'left'); b = fcPort(to, 'left');
+      return { d: 'M' + a.x + ',' + a.y + ' H' + laneFar + ' V' + b.y + ' H' + b.x, a: a, b: b };
+    }
+
+    if (edge.route === 'around-left' || (goingBack && from.col < 2)) {
+      var laneL = FC.padX - 46;
+      a = fcPort(from, 'left'); b = fcPort(to, 'left');
+      d = 'M' + a.x + ',' + a.y + ' H' + laneL + ' V' + b.y + ' H' + b.x;
+    } else if (edge.route === 'around-right' || edge.route === 'back-right' || (goingBack && from.col >= 2)) {
+      var laneR = bounds.width - FC.padX + 46;
+      a = fcPort(from, 'right'); b = fcPort(to, 'right');
+      d = 'M' + a.x + ',' + a.y + ' H' + laneR + ' V' + b.y + ' H' + b.x;
+    } else if (from.col === to.col) {
+      a = fcPort(from, 'bottom'); b = fcPort(to, 'top');
+      d = 'M' + a.x + ',' + a.y + ' V' + b.y;
+    } else {
+      // Different column and row: down out of the bottom, across, then in.
+      a = fcPort(from, 'bottom');
+      b = fcPort(to, 'top');
+      var midY = (a.y + b.y) / 2;
+      d = 'M' + a.x + ',' + a.y + ' V' + midY + ' H' + b.x + ' V' + b.y;
+    }
+    return { d: d, a: a, b: b };
+  }
+
+  function fcLabelPos(path, edge) {
+    // Horizontal runs get the label above the middle of the run.
+    if (path.horizontal || path.a.y === path.b.y) {
+      return { x: (path.a.x + path.b.x) / 2, y: path.a.y - 9 };
+    }
+    // Purely vertical: just below where it leaves the shape.
+    if (Math.abs(path.a.x - path.b.x) < 2) {
+      return { x: path.a.x + 10, y: path.a.y + 20 };
+    }
+    // Elbow: on the horizontal leg, which is the empty part of the route.
+    return { x: (path.a.x + path.b.x) / 2, y: (path.a.y + path.b.y) / 2 - 8 };
+  }
+
+  function renderFlowchart() {
+    var fc = SW.Workflows && SW.Workflows.FLOWCHART;
+    if (!fc || !Array.isArray(fc.nodes) || !fc.nodes.length) {
+      return '<p class="muted">SW.Workflows.FLOWCHART is missing or malformed.</p>';
+    }
+
+    // Which nodes point at something carrying a known gap.
+    var gapRefs = {};
+    var journey = (SW.Workflows && SW.Workflows.JOURNEY) || {};
+    (journey.stages || []).forEach(function (st) {
+      if (countKnownGaps(st.edgeCases || [])) gapRefs[st.id] = true;
+    });
+    ((SW.Workflows && SW.Workflows.LIST) || []).forEach(function (wf) {
+      if (countKnownGaps(wf.edgeCases || [])) gapRefs[wf.id] = true;
+    });
+
+    var byId = {};
+    fc.nodes.forEach(function (n) {
+      n.hasGap = !!(n.ref && gapRefs[n.ref]);
+      byId[n.id] = n;
+    });
+
+    var maxCol = fc.nodes.reduce(function (m, n) { return Math.max(m, n.col); }, 0);
+    var maxRow = fc.nodes.reduce(function (m, n) { return Math.max(m, n.row); }, 0);
+    var bounds = {
+      width: FC.padX * 2 + maxCol * FC.colW + FC.box.w,
+      height: FC.padY * 2 + maxRow * FC.rowH + FC.box.h,
+    };
+
+    var edges = (fc.edges || []).map(function (e) {
+      var from = byId[e.from], to = byId[e.to];
+      if (!from || !to) return '';
+      var path = fcPath(from, to, e, bounds);
+      var out = '<path class="fc-edge" d="' + path.d + '" marker-end="url(#fc-arrow)" />';
+      if (e.label) {
+        var pos = fcLabelPos(path, e);
+        out += '<text class="fc-edge-label" x="' + pos.x + '" y="' + pos.y + '">' + esc(e.label) + '</text>';
+      }
+      return out;
+    }).join('');
+
+    var nodes = fc.nodes.map(fcShape).join('');
+
+    return (
+      '<div class="fc-wrap">' +
+      '<svg class="fc-svg" viewBox="0 0 ' + bounds.width + ' ' + bounds.height + '" ' +
+      'role="img" aria-label="' + esc(fc.title || 'Flowchart') + '">' +
+      '<defs><marker id="fc-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" ' +
+      'markerHeight="7" orient="auto-start-reverse">' +
+      '<path class="fc-arrowhead" d="M0,0 L10,5 L0,10 z" /></marker></defs>' +
+      edges + nodes +
+      '</svg></div>' +
+      '<div class="fc-legend">' +
+      '<span><span class="fc-key fc-key-stadium"></span>Start / finish</span>' +
+      '<span><span class="fc-key fc-key-box"></span>Action</span>' +
+      '<span><span class="fc-key fc-key-diamond"></span>Decision</span>' +
+      '<span><span class="fc-key fc-key-io"></span>You type something</span>' +
+      '<span><span class="fc-key fc-key-gap"></span>Has a known gap</span>' +
+      '</div>'
+    );
+  }
+
   function renderJourney() {
     var root = qs('#section-journey .section-body');
     if (!root) return;
@@ -461,6 +670,7 @@ var SW = SW || {};
 
     var summaryHtml =
       (journey.summary ? '<p class="lead">' + esc(journey.summary) + '</p>' : '') +
+      renderFlowchart() +
       '<div class="journey-gap-summary">' +
       '<span class="gap-chip gap-chip-handled">' + esc(handledCount) + ' edge case' +
       (handledCount === 1 ? '' : 's') + ' handled</span>' +
@@ -604,6 +814,38 @@ var SW = SW || {};
   }
 
   function wireJourneyInteractions(root) {
+    // Clicking a box on the flowchart opens the matching stage or branch in
+    // the detail below, so the diagram is a way in rather than decoration.
+    qsa('.fc-node', root).forEach(function (node) {
+      var ref = node.getAttribute('data-ref');
+      if (!ref) return;
+
+      function openTarget() {
+        // Stages are addressed by element id, branches by a data attribute -
+        // check both rather than assuming one convention.
+        var target = document.getElementById('journey-stage-' + ref) ||
+                     qs('[data-stage-id="' + ref + '"]', root) ||
+                     qs('[data-branch-id="' + ref + '"]', root) ||
+                     qs('[data-cross-id="' + ref + '"]', root) ||
+                     (ref === 'settled' ? qs('.journey-terminal', root) : null);
+        if (!target) return;
+        var header = qs('.journey-node-header, .journey-branch-btn, .cross-cutting-header', target) ||
+                     (target.matches && target.matches('button') ? target : null);
+        if (header && header.getAttribute('aria-expanded') !== 'true') header.click();
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        qsa('.fc-node', root).forEach(function (n) { n.classList.remove('is-active'); });
+        node.classList.add('is-active');
+      }
+
+      node.addEventListener('click', openTarget);
+      node.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openTarget();
+        }
+      });
+    });
+
     qsa('.journey-node-header', root).forEach(function (btn) {
       var content = btn.parentElement;
       var detail = content ? qs('.journey-stage-detail', content) : null;

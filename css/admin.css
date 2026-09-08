@@ -1501,3 +1501,154 @@ button {
     break-inside: avoid;
   }
 }
+
+/* ======================================================================
+   Flowchart
+   The whole app as one diagram. Colours come from the token set so it
+   works in both themes; nothing here is a hard-coded hex that only looks
+   right on white.
+   ====================================================================== */
+
+.fc-wrap {
+  margin: 0 0 12px;
+  padding: 20px 8px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  /* A wide diagram scrolls rather than squashing its labels illegibly. */
+  overflow-x: auto;
+}
+
+.fc-svg {
+  display: block;
+  width: 100%;
+  min-width: 720px;
+  height: auto;
+}
+
+/* ---- shapes ---- */
+.fc-shape {
+  fill: var(--surface-2);
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+
+.fc-process .fc-shape { fill: var(--surface-2); }
+
+.fc-decision .fc-shape {
+  fill: color-mix(in srgb, var(--warn) 14%, var(--surface-2));
+  stroke: var(--warn);
+}
+
+.fc-io .fc-shape {
+  fill: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
+  stroke: var(--accent);
+}
+
+.fc-start .fc-shape {
+  fill: color-mix(in srgb, var(--accent) 18%, var(--surface-2));
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.fc-terminal .fc-shape {
+  fill: color-mix(in srgb, var(--accent) 26%, var(--surface-2));
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+
+/* ---- text ---- */
+.fc-label {
+  font-size: 13.5px;
+  font-weight: 600;
+  fill: var(--text);
+  pointer-events: none;
+}
+
+.fc-sub {
+  font-size: 11px;
+  fill: var(--text-muted);
+  pointer-events: none;
+}
+
+.fc-terminal .fc-label { font-size: 14.5px; }
+
+/* ---- edges ---- */
+.fc-edge {
+  fill: none;
+  stroke: var(--text-muted);
+  stroke-width: 1.6;
+  opacity: 0.75;
+}
+
+.fc-arrowhead { fill: var(--text-muted); opacity: 0.75; }
+
+.fc-edge-label {
+  font-size: 11px;
+  font-weight: 600;
+  fill: var(--text-muted);
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+
+/* ---- known gaps, marked on the diagram itself ---- */
+.fc-gap-dot { fill: var(--danger); }
+.fc-gap-mark {
+  font-size: 10px;
+  font-weight: 700;
+  fill: #fff;
+  pointer-events: none;
+}
+
+/* ---- interaction ---- */
+.fc-node { cursor: pointer; }
+.fc-node:hover .fc-shape,
+.fc-node:focus-visible .fc-shape {
+  stroke-width: 2.5;
+  filter: brightness(1.06);
+}
+.fc-node:focus-visible { outline: none; }
+.fc-node:focus-visible .fc-shape { stroke: var(--accent); }
+.fc-node.is-active .fc-shape {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+/* ---- legend ---- */
+.fc-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  margin: 0 0 24px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.fc-legend span { display: inline-flex; align-items: center; gap: 6px; }
+
+.fc-key {
+  width: 15px;
+  height: 12px;
+  display: inline-block;
+  border: 1.5px solid var(--border);
+  background: var(--surface-2);
+}
+
+.fc-key-stadium { border-radius: 999px; border-color: var(--accent); }
+.fc-key-box { border-radius: 3px; }
+.fc-key-diamond { transform: rotate(45deg); width: 11px; height: 11px; border-color: var(--warn); }
+.fc-key-io { transform: skewX(-18deg); border-color: var(--accent); }
+.fc-key-gap { border-radius: 999px; background: var(--danger); border-color: var(--danger); }
+
+@media (max-width: 760px) {
+  .fc-wrap { padding: 12px 4px 4px; }
+  .fc-legend { gap: 10px; font-size: 11px; }
+}
+
+@media print {
+  .fc-wrap { overflow: visible; break-inside: avoid; }
+  .fc-svg { min-width: 0; }
+}

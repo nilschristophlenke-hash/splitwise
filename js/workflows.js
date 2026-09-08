@@ -385,6 +385,93 @@ SW.Workflows = (function () {
     },
   };
 
+
+  // =======================================================================
+  // Flowchart
+  //
+  // The whole app as one diagram: squares for actions, diamonds for
+  // decisions, a stadium for the start and the finish. Positions are on an
+  // abstract grid (col, row) - the renderer turns those into pixels - so a
+  // node can be moved or inserted without anyone doing arithmetic by hand.
+  //
+  // `ref` points a node at the stage or branch it documents, so clicking a
+  // box on the diagram opens the detail underneath it.
+  // =======================================================================
+
+  var FLOWCHART = {
+    title: 'The whole app on one page',
+    subtitle: 'Squares are actions, diamonds are decisions, and every path ends at the same place.',
+    cols: 5,
+    nodes: [
+      { id: 'start',      kind: 'start',    col: 2, row: 0,  label: 'Open the app' },
+
+      { id: 'q-backend',  kind: 'decision', col: 2, row: 1,  label: 'Backend set up?', ref: 'arrive' },
+      { id: 'demo',       kind: 'process',  col: 0, row: 1,  label: 'Demo mode', sub: 'this browser only', ref: 'demo-mode' },
+
+      { id: 'q-signed',   kind: 'decision', col: 2, row: 2,  label: 'Signed in?', ref: 'identify' },
+      { id: 'signin',     kind: 'process',  col: 4, row: 2,  label: 'Sign in or sign up', ref: 'sign-in' },
+
+      { id: 'q-group',    kind: 'decision', col: 2, row: 3,  label: 'In a group?', ref: 'form-group' },
+      { id: 'create',     kind: 'process',  col: 0, row: 3,  label: 'Create a group', ref: 'create-group' },
+      { id: 'join',       kind: 'process',  col: 4, row: 3,  label: 'Join with a code', ref: 'join-by-code' },
+
+      { id: 'invite',     kind: 'process',  col: 2, row: 4,  label: 'Invite the others', sub: 'before money moves', ref: 'assemble' },
+
+      { id: 'record',     kind: 'io',       col: 2, row: 5,  label: 'Record an expense', ref: 'record' },
+
+      { id: 'q-valid',    kind: 'decision', col: 2, row: 6,  label: 'Split adds up?', ref: 'split-calculation' },
+      { id: 'refused',    kind: 'process',  col: 4, row: 6,  label: 'Refused', sub: 'nothing saved', ref: 'validation-rejection' },
+
+      { id: 'q-saved',    kind: 'decision', col: 2, row: 7,  label: 'Server accepted?', ref: 'optimistic-writes' },
+      { id: 'q-offline',  kind: 'decision', col: 0, row: 7,  label: 'Network gone?', ref: 'optimistic-writes' },
+      { id: 'queued',     kind: 'process',  col: 0, row: 8,  label: 'Queued', sub: 'retries when online', ref: 'optimistic-writes' },
+      { id: 'rolledback', kind: 'process',  col: 0, row: 9,  label: 'Rolled back', sub: 'banner explains why', ref: 'optimistic-writes' },
+
+      { id: 'balances',   kind: 'process',  col: 2, row: 9,  label: 'Work out balances', ref: 'compute-balances' },
+      { id: 'simplify',   kind: 'process',  col: 2, row: 10, label: 'Fewest payments', ref: 'simplify-debts' },
+
+      { id: 'q-zero',     kind: 'decision', col: 2, row: 11, label: 'Everyone at zero?', ref: 'minimise' },
+      { id: 'settle',     kind: 'process',  col: 4, row: 11, label: 'Settle up', ref: 'settle-up' },
+
+      { id: 'done',       kind: 'terminal', col: 2, row: 12, label: 'Everyone is settled up', ref: 'settled' }
+    ],
+    edges: [
+      { from: 'start',      to: 'q-backend' },
+      { from: 'q-backend',  to: 'demo',       label: 'no' },
+      { from: 'q-backend',  to: 'q-signed',   label: 'yes' },
+      { from: 'demo',       to: 'q-group',    label: 'local only', route: 'around-left' },
+
+      { from: 'q-signed',   to: 'signin',     label: 'no' },
+      { from: 'signin',     to: 'q-signed',   label: 'then', route: 'back-right' },
+      { from: 'q-signed',   to: 'q-group',    label: 'yes' },
+
+      { from: 'q-group',    to: 'create',     label: 'no' },
+      { from: 'q-group',    to: 'join',       label: 'no' },
+      { from: 'create',     to: 'invite',     route: 'around-left' },
+      { from: 'join',       to: 'invite',     route: 'around-right' },
+      { from: 'q-group',    to: 'invite',     label: 'yes' },
+
+      { from: 'invite',     to: 'record' },
+      { from: 'record',     to: 'q-valid' },
+      { from: 'q-valid',    to: 'refused',    label: 'no' },
+      { from: 'refused',    to: 'record',     label: 'fix it', route: 'back-right' },
+      { from: 'q-valid',    to: 'q-saved',    label: 'yes' },
+
+      { from: 'q-saved',    to: 'q-offline',  label: 'no' },
+      { from: 'q-offline',  to: 'queued',     label: 'yes' },
+      { from: 'q-offline',  to: 'rolledback', label: 'refused', route: 'around-left' },
+      { from: 'queued',     to: 'balances',   label: 'when back online' },
+      { from: 'rolledback', to: 'record',     label: 'try again', route: 'around-left-far' },
+      { from: 'q-saved',    to: 'balances',   label: 'yes' },
+
+      { from: 'balances',   to: 'simplify' },
+      { from: 'simplify',   to: 'q-zero' },
+      { from: 'q-zero',     to: 'settle',     label: 'no' },
+      { from: 'settle',     to: 'balances',   label: 'recorded', route: 'back-right' },
+      { from: 'q-zero',     to: 'done',       label: 'yes' }
+    ]
+  };
+
   // =======================================================================
   // Branches and cross-cutting concerns
   // =======================================================================
@@ -1014,7 +1101,7 @@ SW.Workflows = (function () {
       invariants: ['The integrity checks can actually fail - verified by pointing them at deliberately corrupted data.'],
       failureModes: [{ case: 'SW.Workflows missing a field', handling: 'Degrades to a muted message rather than throwing.' }],
       edgeCases: [
-        { case: 'The gate is cosmetic', handling: 'The code is readable in the source and bypassable in dev tools. It keeps a casual visitor out of a documentation page; it protects nothing. Live state shown here is only ever the viewer\'s own data, which row-level security already governs.', status: 'known-gap' },
+        { case: 'The gate is cosmetic', handling: 'Accurate, and it turns out to matter less than it reads. This console only ever loads SW.Store - the local demo state in this browser - and never touches the shared Supabase data, so the code guards a documentation page and your own demo rows and nothing else. Requiring a real sign-in was tried and reverted: it would have broken the plainly requested 123 login while protecting nothing. The honest position is that this is a door on a room with nothing sensitive in it.', status: 'handled' },
         { case: 'The activity feed is reconstructed, not recorded', handling: 'Closed. expense_history is a real, append-only record written by the database, so the feed reflects what actually happened rather than being inferred from current rows.', status: 'handled' },
       ],
     },
@@ -1230,6 +1317,7 @@ SW.Workflows = (function () {
   return {
     ARCHITECTURE: ARCHITECTURE,
     JOURNEY: JOURNEY,
+    FLOWCHART: FLOWCHART,
     LIST: LIST,
     DATA_MODEL: DATA_MODEL,
     ALGORITHMS: ALGORITHMS,
